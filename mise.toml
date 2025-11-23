@@ -5,3 +5,31 @@ golangci-lint = "2.6.2"
 [tasks.build]
 run = "go build -o prep"
 description = "Build the application binary"
+
+[tasks.run]
+run = "go run ."
+description = "Run the application"
+
+[tasks.test]
+run = "go test ./..."
+description = "Run all tests"
+
+[tasks.lint]
+run = "golangci-lint run"
+description = "Run linter"
+
+[tasks.fmt]
+run = "go fmt ./..."
+description = "Format all Go files"
+
+[tasks.tidy]
+run = "go mod tidy"
+description = "Tidy go.mod and go.sum"
+
+[tasks.vet]
+run = "go vet ./..."
+description = "Run go vet"
+
+[tasks.check]
+depends = ["fmt", "vet", "lint", "test"]
+description = "Run all checks (fmt, vet, lint, test)"
