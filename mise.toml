@@ -2,6 +2,10 @@
 go = '1.25.4'
 golangci-lint = "2.6.2"
 
+[env]
+CGO_ENABLED = "0"
+GOLANGCI_LINT_CACHE = "{{config_root}}/.cache/golangci-lint"
+
 [tasks.build]
 run = "go build -o prep"
 description = "Build the application binary"
