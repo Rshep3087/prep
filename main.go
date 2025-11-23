@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
@@ -113,6 +116,30 @@ type taskDoneMsg struct {
 type miseVersionMsg struct {
 	version string
 	err     error
+}
+
+// tickMsg is sent periodically to trigger a refresh of mise data.
+type tickMsg time.Time
+
+// refreshInterval is how often to poll mise for changes.
+const refreshInterval = 2 * time.Second
+
+// doTick returns a command that sends a tickMsg after the refresh interval.
+func doTick() tea.Cmd {
+	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+// reloadMiseData returns commands to reload all mise data and schedule the next tick.
+func reloadMiseData(runner CommandRunner) tea.Cmd {
+	ctx := context.Background()
+	return tea.Batch(
+		loadMiseTasks(ctx, runner),
+		loadMiseTools(ctx, runner),
+		loadMiseEnvVars(ctx, runner),
+		doTick(),
+	)
 }
 
 // loadJSON is a generic loader that runs a command and unmarshals JSON.
@@ -476,6 +503,7 @@ func (m model) Init() tea.Cmd {
 		loadMiseTools(ctx, m.runner),
 		loadMiseEnvVars(ctx, m.runner),
 		loadMiseVersion(ctx, m.runner),
+		doTick(),
 	)
 }
 
@@ -530,14 +558,24 @@ func handleTasksLoaded(m model, msg tasksLoadedMsg) model {
 	}
 
 	log.Printf("loaded %d tasks", len(msg.tasks))
+
+	// Sort tasks by name for stable ordering
+	slices.SortFunc(msg.tasks, func(a, b Task) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
 	m.tasks = msg.tasks
 	m.tasksLoading = false
+
+	// Preserve cursor position
+	cursor := m.tasksTable.Cursor()
 
 	rows := make([]table.Row, 0, len(m.tasks))
 	for _, task := range m.tasks {
 		rows = append(rows, table.Row{task.Name, task.Description})
 	}
 	m.tasksTable = newTable(getTasksTableConfig(), rows, m.focus == focusTasks)
+	m.tasksTable.SetCursor(cursor)
 	return m
 }
 
@@ -551,14 +589,24 @@ func handleToolsLoaded(m model, msg toolsLoadedMsg) model {
 	}
 
 	log.Printf("loaded %d tools", len(msg.tools))
+
+	// Sort tools by name for stable ordering
+	slices.SortFunc(msg.tools, func(a, b Tool) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
 	m.tools = msg.tools
 	m.toolsLoading = false
+
+	// Preserve cursor position
+	cursor := m.toolsTable.Cursor()
 
 	rows := make([]table.Row, 0, len(m.tools))
 	for _, tool := range m.tools {
 		rows = append(rows, table.Row{tool.Name, tool.Version, tool.RequestedVersion})
 	}
 	m.toolsTable = newTable(getToolsTableConfig(), rows, m.focus == focusTools)
+	m.toolsTable.SetCursor(cursor)
 	return m
 }
 
@@ -572,8 +620,17 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 	}
 
 	log.Printf("loaded %d env vars", len(msg.envVars))
+
+	// Sort env vars by name for stable ordering
+	slices.SortFunc(msg.envVars, func(a, b EnvVar) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
 	m.envVars = msg.envVars
 	m.envVarsLoading = false
+
+	// Preserve cursor position
+	cursor := m.envVarsTable.Cursor()
 
 	rows := make([]table.Row, 0, len(m.envVars))
 	for _, ev := range m.envVars {
@@ -584,6 +641,18 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 		rows = append(rows, table.Row{ev.Name, displayValue})
 	}
 	m.envVarsTable = newTable(getEnvVarsTableConfig(), rows, m.focus == focusEnvVars)
+	m.envVarsTable.SetCursor(cursor)
+	return m
+}
+
+// handleMiseVersion processes the miseVersionMsg and updates the model.
+func handleMiseVersion(m model, msg miseVersionMsg) model {
+	if msg.err != nil {
+		log.Printf("error loading mise version: %v", msg.err)
+		return m
+	}
+	m.miseVersion = msg.version
+	log.Printf("loaded mise version: %s", msg.version)
 	return m
 }
 
@@ -632,13 +701,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return handleEnvVarsLoaded(m, msg), nil
 
 	case miseVersionMsg:
-		if msg.err != nil {
-			log.Printf("error loading mise version: %v", msg.err)
-		} else {
-			m.miseVersion = msg.version
-			log.Printf("loaded mise version: %s", msg.version)
-		}
-		return m, nil
+		return handleMiseVersion(m, msg), nil
+
+	case tickMsg:
+		// Reload mise data periodically to pick up config changes
+		return m, reloadMiseData(m.runner)
 
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
