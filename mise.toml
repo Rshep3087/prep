@@ -11,7 +11,7 @@ run = "go build -o prep"
 description = "Build the application binary"
 
 [tasks.clean-debug]
-run = "rm -f debug.log"
+run = ": > debug.log"
 description = "Clear the debug.log file"
 
 [tasks.run]
