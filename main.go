@@ -19,7 +19,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// CommandRunner runs commands
+// CommandRunner runs commands.
 type CommandRunner interface {
 	Run(ctx context.Context, args ...string) ([]byte, error)
 }
@@ -379,6 +379,47 @@ func (m model) Init() tea.Cmd {
 	)
 }
 
+// Table layout constants for resize calculations.
+const (
+	tablePadding       = 4 // padding for table borders
+	columnPadding      = 5 // padding between columns
+	toolsColumnPadding = 8 // extra padding for tools table
+)
+
+// updateTableWidths adjusts table widths based on the current terminal width.
+func updateTableWidths(m model) model {
+	if m.windowWidth == 0 {
+		return m
+	}
+
+	// Use available width (with some padding for borders)
+	availableWidth := m.windowWidth - tablePadding
+
+	// Tasks table: Name + Description columns
+	tasksNameWidth := colWidthName
+	tasksDescWidth := max(availableWidth-tasksNameWidth-columnPadding, colWidthDescription)
+	m.tasksTable.SetColumns([]table.Column{
+		{Title: "Name", Width: tasksNameWidth},
+		{Title: "Description", Width: tasksDescWidth},
+	})
+	m.tasksTable.SetWidth(availableWidth)
+
+	// Tools table: Name + Version + Requested columns
+	toolsWidth := min(colWidthName+colWidthVersion*2+toolsColumnPadding, availableWidth)
+	m.toolsTable.SetWidth(toolsWidth)
+
+	// EnvVars table: Name + Value columns
+	envNameWidth := colWidthEnvName
+	envValueWidth := max(availableWidth-envNameWidth-columnPadding, colWidthValue)
+	m.envVarsTable.SetColumns([]table.Column{
+		{Title: "Name", Width: envNameWidth},
+		{Title: "Value", Width: envValueWidth},
+	})
+	m.envVarsTable.SetWidth(availableWidth)
+
+	return m
+}
+
 // handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
 func handleTasksLoaded(m model, msg tasksLoadedMsg) model {
 	if msg.err != nil {
@@ -499,6 +540,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				viewport.WithHeight(msg.Height-viewportHeaderFooterHeight),
 			)
 			m.viewport.SetContent(strings.Join(m.output, "\n"))
+		} else {
+			// Update table widths based on terminal width
+			m = updateTableWidths(m)
 		}
 		return m, nil
 	}
@@ -682,7 +726,9 @@ func (m model) View() tea.View {
 		help,
 	)
 
-	return tea.NewView(content)
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 // renderOutputView renders the task output viewport.
@@ -720,7 +766,9 @@ func (m model) renderOutputView() tea.View {
 		help,
 	)
 
-	return tea.NewView(content)
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
