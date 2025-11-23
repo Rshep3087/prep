@@ -24,6 +24,7 @@ go.work.sum
 
 # env file
 .env
+mise.local.toml
 
 # Editor/IDE
 .idea/
@@ -35,3 +36,6 @@ CLAUDE.md
 
 # Debugging
 debug.log
+
+# Added by goreleaser init:
+dist/
