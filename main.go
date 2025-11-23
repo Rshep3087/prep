@@ -576,6 +576,11 @@ func handleTasksLoaded(m model, msg tasksLoadedMsg) model {
 	}
 	m.tasksTable = newTable(getTasksTableConfig(), rows, m.focus == focusTasks)
 	m.tasksTable.SetCursor(cursor)
+
+	// Re-apply width settings if we have window dimensions
+	if m.windowWidth > 0 {
+		m = updateTableWidths(m)
+	}
 	return m
 }
 
@@ -607,6 +612,11 @@ func handleToolsLoaded(m model, msg toolsLoadedMsg) model {
 	}
 	m.toolsTable = newTable(getToolsTableConfig(), rows, m.focus == focusTools)
 	m.toolsTable.SetCursor(cursor)
+
+	// Re-apply width settings if we have window dimensions
+	if m.windowWidth > 0 {
+		m = updateTableWidths(m)
+	}
 	return m
 }
 
@@ -626,6 +636,21 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 		return cmp.Compare(a.Name, b.Name)
 	})
 
+	// Build a map of previously unmasked env vars to preserve state
+	unmasked := make(map[string]bool)
+	for _, ev := range m.envVars {
+		if !ev.Masked {
+			unmasked[ev.Name] = true
+		}
+	}
+
+	// Apply preserved mask state to new env vars
+	for i := range msg.envVars {
+		if unmasked[msg.envVars[i].Name] {
+			msg.envVars[i].Masked = false
+		}
+	}
+
 	m.envVars = msg.envVars
 	m.envVarsLoading = false
 
@@ -642,6 +667,11 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 	}
 	m.envVarsTable = newTable(getEnvVarsTableConfig(), rows, m.focus == focusEnvVars)
 	m.envVarsTable.SetCursor(cursor)
+
+	// Re-apply width settings if we have window dimensions
+	if m.windowWidth > 0 {
+		m = updateTableWidths(m)
+	}
 	return m
 }
 
