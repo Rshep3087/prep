@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -9,8 +10,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 
 	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -68,6 +71,16 @@ type EnvVar struct {
 type envVarsLoadedMsg struct {
 	envVars []EnvVar
 	err     error
+}
+
+// taskOutputMsg is sent when a running task produces output.
+type taskOutputMsg struct {
+	line string
+}
+
+// taskDoneMsg is sent when a task finishes executing.
+type taskDoneMsg struct {
+	err error
 }
 
 // loadMiseTasks returns a Cmd that loads tasks asynchronously.
@@ -159,6 +172,47 @@ func loadMiseEnvVars(ctx context.Context) tea.Cmd {
 	}
 }
 
+// runTask executes a mise task and streams output back to the TUI.
+func runTask(ctx context.Context, taskName string, p *tea.Program) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.CommandContext(ctx, "mise", "run", taskName)
+
+		// Create pipes for stdout and stderr
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return taskDoneMsg{err: fmt.Errorf("failed to create stdout pipe: %w", err)}
+		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			return taskDoneMsg{err: fmt.Errorf("failed to create stderr pipe: %w", err)}
+		}
+
+		if startErr := cmd.Start(); startErr != nil {
+			return taskDoneMsg{err: fmt.Errorf("failed to start task: %w", startErr)}
+		}
+
+		// Stream stdout
+		go func() {
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				p.Send(taskOutputMsg{line: scanner.Text()})
+			}
+		}()
+
+		// Stream stderr
+		go func() {
+			scanner := bufio.NewScanner(stderr)
+			for scanner.Scan() {
+				p.Send(taskOutputMsg{line: scanner.Text()})
+			}
+		}()
+
+		// Wait for the command to finish
+		err = cmd.Wait()
+		return taskDoneMsg{err: err}
+	}
+}
+
 // maskValue returns a masked representation of a value.
 func maskValue(value string) string {
 	if len(value) == 0 {
@@ -188,6 +242,18 @@ type model struct {
 	toolsLoading   bool
 	envVarsLoading bool
 	err            error
+
+	// Task execution state
+	showOutput   bool               // whether to show the output viewport
+	runningTask  string             // name of the task being run
+	taskRunning  bool               // whether a task is currently running
+	taskErr      error              // error from task execution (if any)
+	output       []string           // output lines from the task
+	viewport     viewport.Model     // scrollable viewport for output
+	cancelFunc   context.CancelFunc // to cancel the running task
+	windowWidth  int
+	windowHeight int
+	program      *tea.Program // reference to the program for sending messages
 }
 
 func (m model) Init() tea.Cmd {
@@ -334,28 +400,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "q", "ctrl+c", "esc":
-			return m, tea.Quit
-		case "enter":
-			// Future: execute selected task
-			return m, tea.Quit
-		case "tab":
-			// Cycle focus: tasks -> tools -> envVars -> tasks
-			m.tasksTable.Blur()
-			m.toolsTable.Blur()
-			m.envVarsTable.Blur()
-			m.focus = (m.focus + 1) % focusSectionCount
-			switch m.focus {
-			case focusTasks:
-				m.tasksTable.Focus()
-			case focusTools:
-				m.toolsTable.Focus()
-			case focusEnvVars:
-				m.envVarsTable.Focus()
-			}
-			return m, nil
+		// Handle keys differently based on whether we're showing output
+		if m.showOutput {
+			return m.handleOutputKeys(msg)
 		}
+		newModel, newCmd, handled := m.handleMainKeys(msg)
+		if handled {
+			return newModel, newCmd
+		}
+		m = newModel
+		// Fall through to let tables handle navigation keys
+
+	case taskOutputMsg:
+		m.output = append(m.output, msg.line)
+		m.viewport.SetContent(strings.Join(m.output, "\n"))
+		m.viewport.GotoBottom()
+		return m, nil
+
+	case taskDoneMsg:
+		m.taskRunning = false
+		m.taskErr = msg.err
+		m.cancelFunc = nil
+		if msg.err != nil {
+			log.Printf("task %s finished with error: %v", m.runningTask, msg.err)
+		} else {
+			log.Printf("task %s finished successfully", m.runningTask)
+		}
+		return m, nil
 
 	case tasksLoadedMsg:
 		return handleTasksLoaded(m, msg), nil
@@ -367,12 +438,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return handleEnvVarsLoaded(m, msg), nil
 
 	case tea.WindowSizeMsg:
-		// Handle window resize if needed
+		m.windowWidth = msg.Width
+		m.windowHeight = msg.Height
+		if m.showOutput {
+			m.viewport = viewport.New(
+				viewport.WithWidth(msg.Width),
+				viewport.WithHeight(msg.Height-viewportHeaderFooterHeight),
+			)
+			m.viewport.SetContent(strings.Join(m.output, "\n"))
+		}
 		return m, nil
 	}
 
-	// Update the focused table with any other messages
-	if !m.tasksLoading && !m.toolsLoading && !m.envVarsLoading && m.err == nil {
+	// Update the focused table with any other messages (only when not showing output)
+	if !m.showOutput && !m.tasksLoading && !m.toolsLoading && !m.envVarsLoading && m.err == nil {
 		switch m.focus {
 		case focusTasks:
 			m.tasksTable, cmd = m.tasksTable.Update(msg)
@@ -383,7 +462,117 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Update viewport when showing output
+	if m.showOutput {
+		m.viewport, cmd = m.viewport.Update(msg)
+	}
+
 	return m, cmd
+}
+
+// handleMainKeys handles key presses in the main view (task list).
+// Returns (model, cmd, handled) where handled indicates if the key was consumed.
+func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
+	switch msg.String() {
+	case "q", "ctrl+c", "esc":
+		return m, tea.Quit, true
+	case "enter":
+		// Only run tasks when focused on tasks table
+		if m.focus == focusTasks && len(m.tasks) > 0 {
+			selectedRow := m.tasksTable.SelectedRow()
+			if selectedRow != nil {
+				taskName := selectedRow[0]
+				newModel, cmd := m.startTask(taskName)
+				return newModel, cmd, true
+			}
+		}
+		return m, nil, true
+	case "tab":
+		// Cycle focus: tasks -> tools -> envVars -> tasks
+		m.tasksTable.Blur()
+		m.toolsTable.Blur()
+		m.envVarsTable.Blur()
+		m.focus = (m.focus + 1) % focusSectionCount
+		switch m.focus {
+		case focusTasks:
+			m.tasksTable.Focus()
+		case focusTools:
+			m.toolsTable.Focus()
+		case focusEnvVars:
+			m.envVarsTable.Focus()
+		}
+		return m, nil, true
+	}
+	// Key not handled - let tables process it
+	return m, nil, false
+}
+
+// handleOutputKeys handles key presses in the output view.
+func (m model) handleOutputKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc":
+		// Close output view (only if task is not running)
+		if !m.taskRunning {
+			m.showOutput = false
+			m.output = nil
+			m.runningTask = ""
+			m.taskErr = nil
+			return m, nil
+		}
+		return m, nil
+	case "ctrl+c":
+		// Cancel running task
+		if m.taskRunning && m.cancelFunc != nil {
+			log.Printf("cancelling task %s", m.runningTask)
+			m.cancelFunc()
+			return m, nil
+		}
+		// If not running, quit the app
+		if !m.taskRunning {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	// Pass other keys to viewport for scrolling
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	return m, cmd
+}
+
+// viewportHeaderFooterHeight is the space reserved for header and footer in output view.
+const viewportHeaderFooterHeight = 4
+
+// startTask initializes and starts a task execution.
+func (m model) startTask(taskName string) (model, tea.Cmd) {
+	log.Printf("starting task: %s", taskName)
+
+	// Create cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Initialize viewport
+	width := m.windowWidth
+	height := m.windowHeight
+	if width == 0 {
+		width = 80
+	}
+	if height == 0 {
+		height = 24
+	}
+
+	m.viewport = viewport.New(
+		viewport.WithWidth(width),
+		viewport.WithHeight(height-viewportHeaderFooterHeight),
+	)
+
+	m.showOutput = true
+	m.runningTask = taskName
+	m.taskRunning = true
+	m.taskErr = nil
+	m.output = []string{}
+	m.cancelFunc = cancel
+
+	return m, runTask(ctx, taskName, m.program)
 }
 
 // tableStyles returns the default table styles.
@@ -406,6 +595,11 @@ func tableStyles() table.Styles {
 // View renders the program's UI, which can be a string or a [Layer]. The
 // view is rendered after every Update.
 func (m model) View() tea.View {
+	// Show output view if running or viewing task output
+	if m.showOutput {
+		return m.renderOutputView()
+	}
+
 	if m.tasksLoading || m.toolsLoading || m.envVarsLoading {
 		return tea.NewView("Loading mise data...\n")
 	}
@@ -446,7 +640,7 @@ func (m model) View() tea.View {
 	}
 	envVarsView := m.envVarsTable.View()
 
-	help := helpStyle.Render("Tab to switch • ↑/↓ to navigate • Enter to select • q to quit")
+	help := helpStyle.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • q to quit")
 
 	// Build the view using JoinVertical
 	content := lipgloss.JoinVertical(
@@ -459,6 +653,50 @@ func (m model) View() tea.View {
 		"",
 		envVarsTitle,
 		envVarsView,
+		"",
+		help,
+	)
+
+	return tea.NewView(content)
+}
+
+// renderOutputView renders the task output viewport.
+func (m model) renderOutputView() tea.View {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))  // Red
+	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("82")) // Green
+
+	// Header with task name and status
+	title := titleStyle.Render(fmt.Sprintf("Task: %s", m.runningTask))
+
+	var status string
+	switch {
+	case m.taskRunning:
+		status = statusStyle.Render("● Running...")
+	case m.taskErr != nil:
+		status = errorStyle.Render(fmt.Sprintf("✗ Failed: %v", m.taskErr))
+	default:
+		status = successStyle.Render("✓ Completed")
+	}
+
+	header := lipgloss.JoinHorizontal(lipgloss.Top, title, "  ", status)
+
+	// Help text
+	var help string
+	if m.taskRunning {
+		help = helpStyle.Render("Ctrl+C to cancel • ↑/↓ to scroll")
+	} else {
+		help = helpStyle.Render("Esc/q to close • ↑/↓ to scroll • Ctrl+C to quit")
+	}
+
+	// Build the view
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		"",
+		m.viewport.View(),
 		"",
 		help,
 	)
@@ -491,6 +729,7 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		envVarsLoading: true,
 	}
 	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
+	m.program = program
 	_, err := program.Run()
 	return err
 }
