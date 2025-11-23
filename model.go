@@ -204,6 +204,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loader.ToolInstalledMsg:
 		return m.handleToolInstalled(msg)
 
+	case loader.ToolRemovedMsg:
+		return m.handleToolRemoved(msg)
+
 	case watcher.FileChangedMsg:
 		return m.handleFileChanged(msg)
 
@@ -280,7 +283,7 @@ func (m model) View() tea.View {
 	case focusEnvVars:
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • v show • V show all • h hide all • q to quit")
 	case focusTools:
-		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • a to add tool • q to quit")
+		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • a add • u unuse • q to quit")
 	default:
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • q to quit")
 	}

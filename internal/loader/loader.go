@@ -116,6 +116,13 @@ type ToolInstalledMsg struct {
 	Err     error
 }
 
+// ToolRemovedMsg is sent when tool removal completes.
+type ToolRemovedMsg struct {
+	Tool    string
+	Version string
+	Err     error
+}
+
 // ReloadMiseData returns commands to reload all mise data.
 func ReloadMiseData(runner CommandRunner) tea.Cmd {
 	ctx := context.Background()
@@ -298,5 +305,15 @@ func InstallTool(ctx context.Context, runner CommandRunner, tool, version string
 			return ToolInstalledMsg{Tool: tool, Version: version, Err: fmt.Errorf("failed to install: %w", err)}
 		}
 		return ToolInstalledMsg{Tool: tool, Version: version}
+	}
+}
+
+func RemoveTool(ctx context.Context, runner CommandRunner, tool, version string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := runner.Run(ctx, "mise", "unuse", tool+"@"+version)
+		if err != nil {
+			return ToolRemovedMsg{Tool: tool, Version: version, Err: fmt.Errorf("failed to remove: %w", err)}
+		}
+		return ToolRemovedMsg{Tool: tool, Version: version}
 	}
 }

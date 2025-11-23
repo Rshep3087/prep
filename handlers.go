@@ -28,6 +28,9 @@ const (
 	keyEnter = "enter"
 )
 
+// minToolRowFields is the minimum number of fields expected in a tool table row (name, version).
+const minToolRowFields = 2
+
 // handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
 func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 	if msg.Err != nil {
@@ -264,9 +267,28 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 		if m.focus == focusTools {
 			return m.openToolPicker()
 		}
+	case "u":
+		// Unuse tool (only when focused on tools table)
+		if m.focus == focusTools {
+			return m.unuseTool()
+		}
 	}
 	// Key not handled - let tables process it
 	return m, nil, false
+}
+
+func (m model) unuseTool() (model, tea.Cmd, bool) {
+	row := m.toolsTable.SelectedRow()
+	if len(row) < minToolRowFields {
+		return m, nil, false
+	}
+
+	tool := row[0]
+	version := row[1]
+	m.logger.Debug("removing tool", "tool", tool, "version", version)
+
+	ctx := context.Background()
+	return m, loader.RemoveTool(ctx, m.runner, tool, version), true
 }
 
 // handleOutputKeys handles key presses in the output view.
@@ -543,6 +565,20 @@ func (m model) handleToolInstalled(msg loader.ToolInstalledMsg) (model, tea.Cmd)
 	m.selectedTool = ""
 
 	// Reload tools to show the new tool
+	ctx := context.Background()
+	return m, loader.LoadMiseTools(ctx, m.runner)
+}
+
+// handleToolRemoved processes the tool removed message.
+func (m model) handleToolRemoved(msg loader.ToolRemovedMsg) (model, tea.Cmd) {
+	if msg.Err != nil {
+		m.logger.Error("error removing tool", "tool", msg.Tool, "version", msg.Version, "error", msg.Err)
+		return m, nil
+	}
+
+	m.logger.Debug("tool removed", "tool", msg.Tool, "version", msg.Version)
+
+	// Reload tools to reflect the removal
 	ctx := context.Background()
 	return m, loader.LoadMiseTools(ctx, m.runner)
 }
