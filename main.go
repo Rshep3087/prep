@@ -260,6 +260,67 @@ func maskValue(value string) string {
 	return "●●●●●●●●"
 }
 
+// showSelectedEnvVar unmasks the currently selected environment variable.
+func showSelectedEnvVar(m model) model {
+	if len(m.envVars) == 0 {
+		return m
+	}
+	selectedRow := m.envVarsTable.SelectedRow()
+	if selectedRow == nil {
+		return m
+	}
+	selectedName := selectedRow[0]
+	for i := range m.envVars {
+		if m.envVars[i].Name == selectedName {
+			m.envVars[i].Masked = false
+			break
+		}
+	}
+	return refreshEnvVarsTable(m)
+}
+
+// showAllEnvVars unmasks all environment variables.
+func showAllEnvVars(m model) model {
+	for i := range m.envVars {
+		m.envVars[i].Masked = false
+	}
+	return refreshEnvVarsTable(m)
+}
+
+// hideAllEnvVars masks all environment variables.
+func hideAllEnvVars(m model) model {
+	for i := range m.envVars {
+		m.envVars[i].Masked = true
+	}
+	return refreshEnvVarsTable(m)
+}
+
+// refreshEnvVarsTable rebuilds the env vars table rows based on current mask state.
+func refreshEnvVarsTable(m model) model {
+	// Remember the current cursor position
+	cursor := m.envVarsTable.Cursor()
+
+	rows := make([]table.Row, 0, len(m.envVars))
+	for _, ev := range m.envVars {
+		displayValue := maskValue(ev.Value)
+		if !ev.Masked {
+			displayValue = ev.Value
+		}
+		rows = append(rows, table.Row{ev.Name, displayValue})
+	}
+	m.envVarsTable = newTable(getEnvVarsTableConfig(), rows, m.focus == focusEnvVars)
+
+	// Restore the cursor position
+	m.envVarsTable.SetCursor(cursor)
+
+	// Re-apply width settings if we have window dimensions
+	if m.windowWidth > 0 {
+		m = updateTableWidths(m)
+	}
+
+	return m
+}
+
 // focus constants.
 const (
 	focusTasks = iota
@@ -647,6 +708,24 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 			m.envVarsTable.Focus()
 		}
 		return m, nil, true
+	case "v":
+		// Show selected env var value (only when focused on env vars)
+		if m.focus == focusEnvVars {
+			m = showSelectedEnvVar(m)
+			return m, nil, true
+		}
+	case "V":
+		// Show all env var values (only when focused on env vars)
+		if m.focus == focusEnvVars {
+			m = showAllEnvVars(m)
+			return m, nil, true
+		}
+	case "h":
+		// Hide all env var values (only when focused on env vars)
+		if m.focus == focusEnvVars {
+			m = hideAllEnvVars(m)
+			return m, nil, true
+		}
 	}
 	// Key not handled - let tables process it
 	return m, nil, false
@@ -758,7 +837,17 @@ func (m model) View() tea.View {
 	tasksTitle := m.styles.renderTitle("Tasks", m.focus == focusTasks)
 	toolsTitle := m.styles.renderTitle("Tools", m.focus == focusTools)
 	envVarsTitle := m.styles.renderTitle("Environment Variables", m.focus == focusEnvVars)
-	help := m.styles.help.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • q to quit")
+
+	// Contextual help text based on focus
+	var help string
+	switch m.focus {
+	case focusTasks:
+		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • q to quit")
+	case focusEnvVars:
+		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • v show • V show all • h hide all • q to quit")
+	default:
+		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • q to quit")
+	}
 
 	// Build the view using JoinVertical
 	content := lipgloss.JoinVertical(
