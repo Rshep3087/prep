@@ -15,7 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Task represents a mise task from JSON output
+// Task represents a mise task from JSON output.
 type Task struct {
 	Name        string   `json:"name"`
 	Aliases     []string `json:"aliases"`
@@ -25,7 +25,7 @@ type Task struct {
 	Run         []string `json:"run"`
 }
 
-// Tool represents a mise tool (parsed from mise ls --json)
+// Tool represents a mise tool (parsed from mise ls --json).
 type Tool struct {
 	Name             string
 	Version          string
@@ -34,7 +34,7 @@ type Tool struct {
 	Active           bool
 }
 
-// miseToolEntry represents a single tool version entry from mise ls --json
+// miseToolEntry represents a single tool version entry from mise ls --json.
 type miseToolEntry struct {
 	Version          string `json:"version"`
 	RequestedVersion string `json:"requested_version"`
@@ -45,19 +45,19 @@ type miseToolEntry struct {
 	Active bool `json:"active"`
 }
 
-// tasksLoadedMsg is sent when tasks are loaded from mise
+// tasksLoadedMsg is sent when tasks are loaded from mise.
 type tasksLoadedMsg struct {
 	tasks []Task
 	err   error
 }
 
-// toolsLoadedMsg is sent when tools are loaded from mise
+// toolsLoadedMsg is sent when tools are loaded from mise.
 type toolsLoadedMsg struct {
 	tools []Tool
 	err   error
 }
 
-// loadMiseTasks is a Cmd that loads tasks asynchronously
+// loadMiseTasks is a Cmd that loads tasks asynchronously.
 func loadMiseTasks() tea.Msg {
 	cmd := exec.Command("mise", "tasks", "--json")
 	output, err := cmd.Output()
@@ -73,7 +73,7 @@ func loadMiseTasks() tea.Msg {
 	return tasksLoadedMsg{tasks: tasks}
 }
 
-// loadMiseTools is a Cmd that loads tools asynchronously
+// loadMiseTools is a Cmd that loads tools asynchronously.
 func loadMiseTools() tea.Msg {
 	cmd := exec.Command("mise", "ls", "--json")
 	output, err := cmd.Output()
@@ -110,7 +110,7 @@ func loadMiseTools() tea.Msg {
 	return toolsLoadedMsg{tools: tools}
 }
 
-// focus constants
+// focus constants.
 const (
 	focusTasks = iota
 	focusTools
@@ -246,7 +246,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// tableStyles returns the default table styles
+// tableStyles returns the default table styles.
 func tableStyles() table.Styles {
 	s := table.DefaultStyles()
 	s.Header = s.Header.
@@ -325,7 +325,7 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 	if *debug {
 		lf, err := tea.LogToFile("debug.log", "debug")
 		if err != nil {
-			return fmt.Errorf("setup logging to file: %v", err)
+			return fmt.Errorf("setup logging to file: %w", err)
 		}
 		defer func() { _ = lf.Close() }()
 		log.Println("debug logging enabled")
