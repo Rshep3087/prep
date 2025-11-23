@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Run linter"
+
+golangci-lint run

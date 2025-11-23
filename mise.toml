@@ -24,9 +24,6 @@ description = "Run the application"
 run = "go test ./..."
 description = "Run all tests"
 
-[tasks.lint]
-run = "golangci-lint run"
-description = "Run linter"
 
 [tasks.fmt]
 run = "go fmt ./..."
