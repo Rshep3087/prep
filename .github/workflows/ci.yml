@@ -31,7 +31,7 @@ jobs:
                       ~/.cache/golangci-lint
                   key: go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
 
-            - uses: jdx/mise-action@v2
+            - uses: jdx/mise-action@v3
 
             - name: Run checks
               run: mise run check
