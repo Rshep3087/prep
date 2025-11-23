@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,31 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
+
+// CommandRunner runs commands
+type CommandRunner interface {
+	Run(ctx context.Context, args ...string) ([]byte, error)
+}
+
+// ExecRunner implements CommandRunner using os/exec.
+type ExecRunner struct{}
+
+// ErrNoCommand is returned when no command is provided to Run.
+var ErrNoCommand = errors.New("no command provided")
+
+// Run executes a command and returns its output.
+func (ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) == 0 {
+		return nil, ErrNoCommand
+	}
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // args are controlled by the application
+	return cmd.Output()
+}
+
+// MessageSender abstracts the ability to send messages.
+type MessageSender interface {
+	Send(msg tea.Msg)
+}
 
 // Task represents a mise task from JSON output.
 type Task struct {
@@ -83,97 +109,86 @@ type taskDoneMsg struct {
 	err error
 }
 
-// loadMiseTasks returns a Cmd that loads tasks asynchronously.
-func loadMiseTasks(ctx context.Context) tea.Cmd {
+// loadJSON is a generic loader that runs a command and unmarshals JSON.
+func loadJSON[T any](
+	ctx context.Context,
+	runner CommandRunner,
+	args []string,
+	transform func(T) tea.Msg,
+	errMsg func(error) tea.Msg,
+) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "mise", "tasks", "--json")
-		output, err := cmd.Output()
+		output, err := runner.Run(ctx, args...)
 		if err != nil {
-			return tasksLoadedMsg{err: fmt.Errorf("failed to execute mise tasks: %w", err)}
+			return errMsg(fmt.Errorf("failed to execute %s: %w", args[0], err))
 		}
 
-		var tasks []Task
-		err = json.Unmarshal(output, &tasks)
+		var data T
+		err = json.Unmarshal(output, &data)
 		if err != nil {
-			return tasksLoadedMsg{err: fmt.Errorf("failed to parse mise tasks JSON: %w", err)}
+			return errMsg(fmt.Errorf("failed to parse JSON: %w", err))
 		}
 
-		return tasksLoadedMsg{tasks: tasks}
+		return transform(data)
 	}
+}
+
+// loadMiseTasks returns a Cmd that loads tasks asynchronously.
+func loadMiseTasks(ctx context.Context, runner CommandRunner) tea.Cmd {
+	return loadJSON(ctx, runner, []string{"mise", "tasks", "--json"},
+		func(tasks []Task) tea.Msg { return tasksLoadedMsg{tasks: tasks} },
+		func(err error) tea.Msg { return tasksLoadedMsg{err: err} },
+	)
 }
 
 // loadMiseTools returns a Cmd that loads tools asynchronously.
-func loadMiseTools(ctx context.Context) tea.Cmd {
-	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "mise", "ls", "--json")
-		output, err := cmd.Output()
-		if err != nil {
-			return toolsLoadedMsg{err: fmt.Errorf("failed to execute mise ls: %w", err)}
-		}
-
-		// Parse the nested JSON structure: map[toolName][]miseToolEntry
-		var rawTools map[string][]miseToolEntry
-		err = json.Unmarshal(output, &rawTools)
-		if err != nil {
-			return toolsLoadedMsg{err: fmt.Errorf("failed to parse mise ls JSON: %w", err)}
-		}
-
-		// Convert to flat list, only including active tools
-		var tools []Tool
-		for name, entries := range rawTools {
-			for _, entry := range entries {
-				if entry.Active {
-					source := ""
-					if entry.Source != nil {
-						source = entry.Source.Type
+func loadMiseTools(ctx context.Context, runner CommandRunner) tea.Cmd {
+	return loadJSON(ctx, runner, []string{"mise", "ls", "--json"},
+		func(rawTools map[string][]miseToolEntry) tea.Msg {
+			var tools []Tool
+			for name, entries := range rawTools {
+				for _, entry := range entries {
+					if entry.Active {
+						source := ""
+						if entry.Source != nil {
+							source = entry.Source.Type
+						}
+						tools = append(tools, Tool{
+							Name:             name,
+							Version:          entry.Version,
+							RequestedVersion: entry.RequestedVersion,
+							Source:           source,
+							Active:           entry.Active,
+						})
 					}
-					tools = append(tools, Tool{
-						Name:             name,
-						Version:          entry.Version,
-						RequestedVersion: entry.RequestedVersion,
-						Source:           source,
-						Active:           entry.Active,
-					})
 				}
 			}
-		}
-
-		return toolsLoadedMsg{tools: tools}
-	}
+			return toolsLoadedMsg{tools: tools}
+		},
+		func(err error) tea.Msg { return toolsLoadedMsg{err: err} },
+	)
 }
 
 // loadMiseEnvVars returns a Cmd that loads environment variables asynchronously.
-func loadMiseEnvVars(ctx context.Context) tea.Cmd {
-	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "mise", "env", "--json")
-		output, err := cmd.Output()
-		if err != nil {
-			return envVarsLoadedMsg{err: fmt.Errorf("failed to execute mise env: %w", err)}
-		}
-
-		// Parse the JSON structure: map[string]string
-		var rawEnvVars map[string]string
-		err = json.Unmarshal(output, &rawEnvVars)
-		if err != nil {
-			return envVarsLoadedMsg{err: fmt.Errorf("failed to parse mise env JSON: %w", err)}
-		}
-
-		// Convert to EnvVar slice with masked values by default
-		var envVars []EnvVar
-		for name, value := range rawEnvVars {
-			envVars = append(envVars, EnvVar{
-				Name:   name,
-				Value:  value,
-				Masked: true,
-			})
-		}
-
-		return envVarsLoadedMsg{envVars: envVars}
-	}
+func loadMiseEnvVars(ctx context.Context, runner CommandRunner) tea.Cmd {
+	return loadJSON(ctx, runner, []string{"mise", "env", "--json"},
+		func(rawEnvVars map[string]string) tea.Msg {
+			var envVars []EnvVar
+			for name, value := range rawEnvVars {
+				envVars = append(envVars, EnvVar{
+					Name:   name,
+					Value:  value,
+					Masked: true,
+				})
+			}
+			return envVarsLoadedMsg{envVars: envVars}
+		},
+		func(err error) tea.Msg { return envVarsLoadedMsg{err: err} },
+	)
 }
 
 // runTask executes a mise task and streams output back to the TUI.
-func runTask(ctx context.Context, taskName string, p *tea.Program) tea.Cmd {
+func runTask(ctx context.Context, taskName string, sender MessageSender) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.CommandContext(ctx, "mise", "run", taskName)
 
@@ -195,7 +210,7 @@ func runTask(ctx context.Context, taskName string, p *tea.Program) tea.Cmd {
 		go func() {
 			scanner := bufio.NewScanner(stdout)
 			for scanner.Scan() {
-				p.Send(taskOutputMsg{line: scanner.Text()})
+				sender.Send(taskOutputMsg{line: scanner.Text()})
 			}
 		}()
 
@@ -203,7 +218,7 @@ func runTask(ctx context.Context, taskName string, p *tea.Program) tea.Cmd {
 		go func() {
 			scanner := bufio.NewScanner(stderr)
 			for scanner.Scan() {
-				p.Send(taskOutputMsg{line: scanner.Text()})
+				sender.Send(taskOutputMsg{line: scanner.Text()})
 			}
 		}()
 
@@ -230,6 +245,101 @@ const (
 	focusSectionCount // total number of focus sections for cycling
 )
 
+const (
+	// Column width constants.
+	colWidthName        = 20
+	colWidthDescription = 60
+	colWidthVersion     = 15
+	colWidthValue       = 50
+	colWidthEnvName     = 30
+
+	// Table width constants.
+	tableWidthWide   = 82
+	tableWidthNarrow = 52
+)
+
+// tableConfig holds configuration for creating a table.
+type tableConfig struct {
+	columns []table.Column
+	width   int
+}
+
+// styles holds the UI styles used throughout the application.
+type styles struct {
+	title    lipgloss.Style
+	dimTitle lipgloss.Style
+	help     lipgloss.Style
+	err      lipgloss.Style
+	success  lipgloss.Style
+}
+
+// newStyles creates the default UI styles.
+func newStyles() styles {
+	return styles{
+		title:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")),
+		dimTitle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("241")),
+		help:     lipgloss.NewStyle().Foreground(lipgloss.Color("241")),
+		err:      lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
+		success:  lipgloss.NewStyle().Foreground(lipgloss.Color("82")),
+	}
+}
+
+// renderTitle renders a section title with focus state.
+func (s styles) renderTitle(name string, focused bool) string {
+	if focused {
+		return s.title.Render(name)
+	}
+	return s.dimTitle.Render(name)
+}
+
+// getTasksTableConfig returns the table configuration for tasks.
+func getTasksTableConfig() tableConfig {
+	return tableConfig{
+		columns: []table.Column{
+			{Title: "Name", Width: colWidthName},
+			{Title: "Description", Width: colWidthDescription},
+		},
+		width: tableWidthWide,
+	}
+}
+
+// getToolsTableConfig returns the table configuration for tools.
+func getToolsTableConfig() tableConfig {
+	return tableConfig{
+		columns: []table.Column{
+			{Title: "Name", Width: colWidthName},
+			{Title: "Version", Width: colWidthVersion},
+			{Title: "Requested", Width: colWidthVersion},
+		},
+		width: tableWidthNarrow,
+	}
+}
+
+// getEnvVarsTableConfig returns the table configuration for env vars.
+func getEnvVarsTableConfig() tableConfig {
+	return tableConfig{
+		columns: []table.Column{
+			{Title: "Name", Width: colWidthEnvName},
+			{Title: "Value", Width: colWidthValue},
+		},
+		width: tableWidthWide,
+	}
+}
+
+// newTable creates a table with the given configuration.
+func newTable(cfg tableConfig, rows []table.Row, focused bool) table.Model {
+	const headerOffset = 2
+	t := table.New(
+		table.WithColumns(cfg.columns),
+		table.WithRows(rows),
+		table.WithFocused(focused),
+		table.WithStyles(tableStyles()),
+		table.WithWidth(cfg.width),
+	)
+	t.SetHeight(len(rows) + headerOffset)
+	return t
+}
+
 type model struct {
 	tasksTable     table.Model
 	toolsTable     table.Model
@@ -253,23 +363,24 @@ type model struct {
 	cancelFunc   context.CancelFunc // to cancel the running task
 	windowWidth  int
 	windowHeight int
-	program      *tea.Program // reference to the program for sending messages
+
+	// Dependencies (DIP)
+	runner CommandRunner // for running commands
+	sender MessageSender // for sending messages to the program
+	styles styles        // UI styles
 }
 
 func (m model) Init() tea.Cmd {
 	ctx := context.Background()
-	return tea.Batch(loadMiseTasks(ctx), loadMiseTools(ctx), loadMiseEnvVars(ctx))
+	return tea.Batch(
+		loadMiseTasks(ctx, m.runner),
+		loadMiseTools(ctx, m.runner),
+		loadMiseEnvVars(ctx, m.runner),
+	)
 }
 
 // handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
 func handleTasksLoaded(m model, msg tasksLoadedMsg) model {
-	const (
-		nameWidth        = 20
-		descriptionWidth = 60
-		tableWidth       = 82
-		headerOffset     = 2
-	)
-
 	if msg.err != nil {
 		log.Printf("error loading tasks: %v", msg.err)
 		m.err = msg.err
@@ -281,38 +392,16 @@ func handleTasksLoaded(m model, msg tasksLoadedMsg) model {
 	m.tasks = msg.tasks
 	m.tasksLoading = false
 
-	columns := []table.Column{
-		{Title: "Name", Width: nameWidth},
-		{Title: "Description", Width: descriptionWidth},
-	}
-
-	rows := []table.Row{}
+	rows := make([]table.Row, 0, len(m.tasks))
 	for _, task := range m.tasks {
 		rows = append(rows, table.Row{task.Name, task.Description})
 	}
-
-	s := tableStyles()
-	m.tasksTable = table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(m.focus == focusTasks),
-		table.WithStyles(s),
-		table.WithWidth(tableWidth),
-	)
-	m.tasksTable.SetHeight(len(rows) + headerOffset)
+	m.tasksTable = newTable(getTasksTableConfig(), rows, m.focus == focusTasks)
 	return m
 }
 
 // handleToolsLoaded processes the toolsLoadedMsg and initializes the tools table.
 func handleToolsLoaded(m model, msg toolsLoadedMsg) model {
-	const (
-		nameWidth      = 20
-		versionWidth   = 15
-		requestedWidth = 15
-		tableWidth     = 52
-		headerOffset   = 2
-	)
-
 	if msg.err != nil {
 		log.Printf("error loading tools: %v", msg.err)
 		m.err = msg.err
@@ -324,38 +413,16 @@ func handleToolsLoaded(m model, msg toolsLoadedMsg) model {
 	m.tools = msg.tools
 	m.toolsLoading = false
 
-	columns := []table.Column{
-		{Title: "Name", Width: nameWidth},
-		{Title: "Version", Width: versionWidth},
-		{Title: "Requested", Width: requestedWidth},
-	}
-
-	rows := []table.Row{}
+	rows := make([]table.Row, 0, len(m.tools))
 	for _, tool := range m.tools {
 		rows = append(rows, table.Row{tool.Name, tool.Version, tool.RequestedVersion})
 	}
-
-	s := tableStyles()
-	m.toolsTable = table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(m.focus == focusTools),
-		table.WithStyles(s),
-		table.WithWidth(tableWidth),
-	)
-	m.toolsTable.SetHeight(len(rows) + headerOffset)
+	m.toolsTable = newTable(getToolsTableConfig(), rows, m.focus == focusTools)
 	return m
 }
 
 // handleEnvVarsLoaded processes the envVarsLoadedMsg and initializes the env vars table.
 func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
-	const (
-		nameWidth    = 30
-		valueWidth   = 50
-		tableWidth   = 82
-		headerOffset = 2
-	)
-
 	if msg.err != nil {
 		log.Printf("error loading env vars: %v", msg.err)
 		m.err = msg.err
@@ -367,12 +434,7 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 	m.envVars = msg.envVars
 	m.envVarsLoading = false
 
-	columns := []table.Column{
-		{Title: "Name", Width: nameWidth},
-		{Title: "Value", Width: valueWidth},
-	}
-
-	rows := []table.Row{}
+	rows := make([]table.Row, 0, len(m.envVars))
 	for _, ev := range m.envVars {
 		displayValue := maskValue(ev.Value)
 		if !ev.Masked {
@@ -380,16 +442,7 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 		}
 		rows = append(rows, table.Row{ev.Name, displayValue})
 	}
-
-	s := tableStyles()
-	m.envVarsTable = table.New(
-		table.WithColumns(columns),
-		table.WithRows(rows),
-		table.WithFocused(m.focus == focusEnvVars),
-		table.WithStyles(s),
-		table.WithWidth(tableWidth),
-	)
-	m.envVarsTable.SetHeight(len(rows) + headerOffset)
+	m.envVarsTable = newTable(getEnvVarsTableConfig(), rows, m.focus == focusEnvVars)
 	return m
 }
 
@@ -572,7 +625,7 @@ func (m model) startTask(taskName string) (model, tea.Cmd) {
 	m.output = []string{}
 	m.cancelFunc = cancel
 
-	return m, runTask(ctx, taskName, m.program)
+	return m, runTask(ctx, taskName, m.sender)
 }
 
 // tableStyles returns the default table styles.
@@ -608,51 +661,23 @@ func (m model) View() tea.View {
 		return tea.NewView(fmt.Sprintf("Error: %v\n\nPress q to quit.\n", m.err))
 	}
 
-	// Styles
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
-	dimTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("241"))
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-
-	// Tasks section
-	var tasksTitle string
-	if m.focus == focusTasks {
-		tasksTitle = titleStyle.Render("Tasks")
-	} else {
-		tasksTitle = dimTitleStyle.Render("Tasks")
-	}
-	tasksView := m.tasksTable.View()
-
-	// Tools section
-	var toolsTitle string
-	if m.focus == focusTools {
-		toolsTitle = titleStyle.Render("Tools")
-	} else {
-		toolsTitle = dimTitleStyle.Render("Tools")
-	}
-	toolsView := m.toolsTable.View()
-
-	// Environment Variables section
-	var envVarsTitle string
-	if m.focus == focusEnvVars {
-		envVarsTitle = titleStyle.Render("Environment Variables")
-	} else {
-		envVarsTitle = dimTitleStyle.Render("Environment Variables")
-	}
-	envVarsView := m.envVarsTable.View()
-
-	help := helpStyle.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • q to quit")
+	// Build sections using shared renderTitle helper
+	tasksTitle := m.styles.renderTitle("Tasks", m.focus == focusTasks)
+	toolsTitle := m.styles.renderTitle("Tools", m.focus == focusTools)
+	envVarsTitle := m.styles.renderTitle("Environment Variables", m.focus == focusEnvVars)
+	help := m.styles.help.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • q to quit")
 
 	// Build the view using JoinVertical
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		tasksTitle,
-		tasksView,
+		m.tasksTable.View(),
 		"",
 		toolsTitle,
-		toolsView,
+		m.toolsTable.View(),
 		"",
 		envVarsTitle,
-		envVarsView,
+		m.envVarsTable.View(),
 		"",
 		help,
 	)
@@ -662,23 +687,17 @@ func (m model) View() tea.View {
 
 // renderOutputView renders the task output viewport.
 func (m model) renderOutputView() tea.View {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
-	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))  // Red
-	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("82")) // Green
-
 	// Header with task name and status
-	title := titleStyle.Render(fmt.Sprintf("Task: %s", m.runningTask))
+	title := m.styles.title.Render(fmt.Sprintf("Task: %s", m.runningTask))
 
 	var status string
 	switch {
 	case m.taskRunning:
-		status = statusStyle.Render("● Running...")
+		status = m.styles.dimTitle.Render("● Running...")
 	case m.taskErr != nil:
-		status = errorStyle.Render(fmt.Sprintf("✗ Failed: %v", m.taskErr))
+		status = m.styles.err.Render(fmt.Sprintf("✗ Failed: %v", m.taskErr))
 	default:
-		status = successStyle.Render("✓ Completed")
+		status = m.styles.success.Render("✓ Completed")
 	}
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top, title, "  ", status)
@@ -686,9 +705,9 @@ func (m model) renderOutputView() tea.View {
 	// Help text
 	var help string
 	if m.taskRunning {
-		help = helpStyle.Render("Ctrl+C to cancel • ↑/↓ to scroll")
+		help = m.styles.help.Render("Ctrl+C to cancel • ↑/↓ to scroll")
 	} else {
-		help = helpStyle.Render("Esc/q to close • ↑/↓ to scroll • Ctrl+C to quit")
+		help = m.styles.help.Render("Esc/q to close • ↑/↓ to scroll • Ctrl+C to quit")
 	}
 
 	// Build the view
@@ -727,9 +746,11 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		tasksLoading:   true,
 		toolsLoading:   true,
 		envVarsLoading: true,
+		runner:         ExecRunner{},
+		styles:         newStyles(),
 	}
 	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
-	m.program = program
+	m.sender = program // *tea.Program implements MessageSender
 	_, err := program.Run()
 	return err
 }
