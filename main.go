@@ -509,9 +509,8 @@ func (m model) Init() tea.Cmd {
 
 // Table layout constants for resize calculations.
 const (
-	tablePadding       = 4 // padding for table borders
-	columnPadding      = 5 // padding between columns
-	toolsColumnPadding = 8 // extra padding for tools table
+	tablePadding  = 4 // padding for table borders
+	columnPadding = 5 // padding between columns
 )
 
 // updateTableWidths adjusts table widths based on the current terminal width.
@@ -532,9 +531,16 @@ func updateTableWidths(m model) model {
 	})
 	m.tasksTable.SetWidth(availableWidth)
 
-	// Tools table: Name + Version + Requested columns
-	toolsWidth := min(colWidthName+colWidthVersion*2+toolsColumnPadding, availableWidth)
-	m.toolsTable.SetWidth(toolsWidth)
+	// Tools table: Name + Version + Requested columns (expand last column for consistent divider)
+	toolsNameWidth := colWidthName
+	toolsVersionWidth := colWidthVersion
+	toolsRequestedWidth := max(availableWidth-toolsNameWidth-toolsVersionWidth-columnPadding-columnPadding, colWidthVersion)
+	m.toolsTable.SetColumns([]table.Column{
+		{Title: "Name", Width: toolsNameWidth},
+		{Title: "Version", Width: toolsVersionWidth},
+		{Title: "Requested", Width: toolsRequestedWidth},
+	})
+	m.toolsTable.SetWidth(availableWidth)
 
 	// EnvVars table: Name + Value columns
 	envNameWidth := colWidthEnvName
