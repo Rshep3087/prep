@@ -1,0 +1,25 @@
+name: build
+
+on:
+    pull_request:
+    push:
+        branches: ["main"]
+
+env:
+    MISE_EXPERIMENTAL: true
+    CGO_ENABLED: "0"
+
+jobs:
+    matrix-build:
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 10
+        strategy:
+            matrix:
+                os: [ubuntu-latest, macos-latest, windows-latest]
+
+        steps:
+            - uses: actions/checkout@v4
+            - uses: jdx/mise-action@v2
+
+            - name: Build binary
+              run: mise run build
