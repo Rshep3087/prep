@@ -57,6 +57,19 @@ type toolsLoadedMsg struct {
 	err   error
 }
 
+// EnvVar represents a mise environment variable.
+type EnvVar struct {
+	Name   string
+	Value  string
+	Masked bool
+}
+
+// envVarsLoadedMsg is sent when environment variables are loaded from mise.
+type envVarsLoadedMsg struct {
+	envVars []EnvVar
+	err     error
+}
+
 // loadMiseTasks returns a Cmd that loads tasks asynchronously.
 func loadMiseTasks(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
@@ -116,26 +129,70 @@ func loadMiseTools(ctx context.Context) tea.Cmd {
 	}
 }
 
+// loadMiseEnvVars returns a Cmd that loads environment variables asynchronously.
+func loadMiseEnvVars(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.CommandContext(ctx, "mise", "env", "--json")
+		output, err := cmd.Output()
+		if err != nil {
+			return envVarsLoadedMsg{err: fmt.Errorf("failed to execute mise env: %w", err)}
+		}
+
+		// Parse the JSON structure: map[string]string
+		var rawEnvVars map[string]string
+		err = json.Unmarshal(output, &rawEnvVars)
+		if err != nil {
+			return envVarsLoadedMsg{err: fmt.Errorf("failed to parse mise env JSON: %w", err)}
+		}
+
+		// Convert to EnvVar slice with masked values by default
+		var envVars []EnvVar
+		for name, value := range rawEnvVars {
+			envVars = append(envVars, EnvVar{
+				Name:   name,
+				Value:  value,
+				Masked: true,
+			})
+		}
+
+		return envVarsLoadedMsg{envVars: envVars}
+	}
+}
+
+// maskValue returns a masked representation of a value.
+func maskValue(value string) string {
+	if len(value) == 0 {
+		return ""
+	}
+	// Use a consistent mask length for cleaner display
+	return "●●●●●●●●"
+}
+
 // focus constants.
 const (
 	focusTasks = iota
 	focusTools
+	focusEnvVars
+	focusSectionCount // total number of focus sections for cycling
 )
 
 type model struct {
-	tasksTable   table.Model
-	toolsTable   table.Model
-	tasks        []Task
-	tools        []Tool
-	focus        int // focusTasks or focusTools
-	tasksLoading bool
-	toolsLoading bool
-	err          error
+	tasksTable     table.Model
+	toolsTable     table.Model
+	envVarsTable   table.Model
+	tasks          []Task
+	tools          []Tool
+	envVars        []EnvVar
+	focus          int // focusTasks, focusTools, or focusEnvVars
+	tasksLoading   bool
+	toolsLoading   bool
+	envVarsLoading bool
+	err            error
 }
 
 func (m model) Init() tea.Cmd {
 	ctx := context.Background()
-	return tea.Batch(loadMiseTasks(ctx), loadMiseTools(ctx))
+	return tea.Batch(loadMiseTasks(ctx), loadMiseTools(ctx), loadMiseEnvVars(ctx))
 }
 
 // handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
@@ -224,6 +281,52 @@ func handleToolsLoaded(m model, msg toolsLoadedMsg) model {
 	return m
 }
 
+// handleEnvVarsLoaded processes the envVarsLoadedMsg and initializes the env vars table.
+func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
+	const (
+		nameWidth    = 30
+		valueWidth   = 50
+		tableWidth   = 82
+		headerOffset = 2
+	)
+
+	if msg.err != nil {
+		log.Printf("error loading env vars: %v", msg.err)
+		m.err = msg.err
+		m.envVarsLoading = false
+		return m
+	}
+
+	log.Printf("loaded %d env vars", len(msg.envVars))
+	m.envVars = msg.envVars
+	m.envVarsLoading = false
+
+	columns := []table.Column{
+		{Title: "Name", Width: nameWidth},
+		{Title: "Value", Width: valueWidth},
+	}
+
+	rows := []table.Row{}
+	for _, ev := range m.envVars {
+		displayValue := maskValue(ev.Value)
+		if !ev.Masked {
+			displayValue = ev.Value
+		}
+		rows = append(rows, table.Row{ev.Name, displayValue})
+	}
+
+	s := tableStyles()
+	m.envVarsTable = table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(m.focus == focusEnvVars),
+		table.WithStyles(s),
+		table.WithWidth(tableWidth),
+	)
+	m.envVarsTable.SetHeight(len(rows) + headerOffset)
+	return m
+}
+
 // Update is called when a message is received. Use it to inspect messages
 // and, in response, update the model and/or send a command.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -238,15 +341,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Future: execute selected task
 			return m, tea.Quit
 		case "tab":
-			// Toggle focus between tasks and tools
-			if m.focus == focusTasks {
-				m.focus = focusTools
-				m.tasksTable.Blur()
-				m.toolsTable.Focus()
-			} else {
-				m.focus = focusTasks
+			// Cycle focus: tasks -> tools -> envVars -> tasks
+			m.tasksTable.Blur()
+			m.toolsTable.Blur()
+			m.envVarsTable.Blur()
+			m.focus = (m.focus + 1) % focusSectionCount
+			switch m.focus {
+			case focusTasks:
 				m.tasksTable.Focus()
-				m.toolsTable.Blur()
+			case focusTools:
+				m.toolsTable.Focus()
+			case focusEnvVars:
+				m.envVarsTable.Focus()
 			}
 			return m, nil
 		}
@@ -257,17 +363,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolsLoadedMsg:
 		return handleToolsLoaded(m, msg), nil
 
+	case envVarsLoadedMsg:
+		return handleEnvVarsLoaded(m, msg), nil
+
 	case tea.WindowSizeMsg:
 		// Handle window resize if needed
 		return m, nil
 	}
 
 	// Update the focused table with any other messages
-	if !m.tasksLoading && !m.toolsLoading && m.err == nil {
-		if m.focus == focusTasks {
+	if !m.tasksLoading && !m.toolsLoading && !m.envVarsLoading && m.err == nil {
+		switch m.focus {
+		case focusTasks:
 			m.tasksTable, cmd = m.tasksTable.Update(msg)
-		} else {
+		case focusTools:
 			m.toolsTable, cmd = m.toolsTable.Update(msg)
+		case focusEnvVars:
+			m.envVarsTable, cmd = m.envVarsTable.Update(msg)
 		}
 	}
 
@@ -294,7 +406,7 @@ func tableStyles() table.Styles {
 // View renders the program's UI, which can be a string or a [Layer]. The
 // view is rendered after every Update.
 func (m model) View() tea.View {
-	if m.tasksLoading || m.toolsLoading {
+	if m.tasksLoading || m.toolsLoading || m.envVarsLoading {
 		return tea.NewView("Loading mise data...\n")
 	}
 
@@ -325,6 +437,15 @@ func (m model) View() tea.View {
 	}
 	toolsView := m.toolsTable.View()
 
+	// Environment Variables section
+	var envVarsTitle string
+	if m.focus == focusEnvVars {
+		envVarsTitle = titleStyle.Render("Environment Variables")
+	} else {
+		envVarsTitle = dimTitleStyle.Render("Environment Variables")
+	}
+	envVarsView := m.envVarsTable.View()
+
 	help := helpStyle.Render("Tab to switch • ↑/↓ to navigate • Enter to select • q to quit")
 
 	// Build the view using JoinVertical
@@ -335,6 +456,9 @@ func (m model) View() tea.View {
 		"",
 		toolsTitle,
 		toolsView,
+		"",
+		envVarsTitle,
+		envVarsView,
 		"",
 		help,
 	)
@@ -362,8 +486,9 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 	}
 
 	m := &model{
-		tasksLoading: true,
-		toolsLoading: true,
+		tasksLoading:   true,
+		toolsLoading:   true,
+		envVarsLoading: true,
 	}
 	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
 	_, err := program.Run()
