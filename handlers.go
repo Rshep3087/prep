@@ -547,6 +547,39 @@ func (m model) handleToolInstalled(msg loader.ToolInstalledMsg) (model, tea.Cmd)
 	return m, loader.LoadMiseTools(ctx, m.runner)
 }
 
+// handlePickerUpdate handles all messages when the picker is open.
+// The list component needs all message types (not just key presses) for filtering to work.
+func (m model) handlePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		return m.handlePickerKeys(msg)
+
+	case tea.WindowSizeMsg:
+		return m.handleWindowSize(msg), nil
+
+	case loader.RegistryLoadedMsg:
+		return m.handleRegistryLoaded(msg), nil
+
+	case loader.VersionsLoadedMsg:
+		return m.handleVersionsLoaded(msg), nil
+
+	case loader.ToolInstalledMsg:
+		return m.handleToolInstalled(msg)
+	}
+
+	// Pass all other messages to the active list for filtering/cursor blink etc.
+	var cmd tea.Cmd
+	switch m.pickerState {
+	case pickerSelectTool:
+		m.toolList, cmd = m.toolList.Update(msg)
+	case pickerSelectVersion:
+		m.versionList, cmd = m.versionList.Update(msg)
+	case pickerClosed, pickerLoadingVersions, pickerInstalling:
+		// No list to update
+	}
+	return m, cmd
+}
+
 // handlePickerKeys handles key presses in the picker views.
 func (m model) handlePickerKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	switch m.pickerState {
@@ -568,6 +601,13 @@ func (m model) handlePickerKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 
 // handleToolListKeys handles keys when selecting a tool.
 func (m model) handleToolListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	// If the list is filtering, let it handle all keys (including esc to cancel filter)
+	if m.toolList.FilterState() == list.Filtering {
+		var cmd tea.Cmd
+		m.toolList, cmd = m.toolList.Update(msg)
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case keyEsc, "q":
 		return m.closeToolPicker(), nil
@@ -595,6 +635,13 @@ func (m model) handleToolListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 
 // handleVersionListKeys handles keys when selecting a version.
 func (m model) handleVersionListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	// If the list is filtering, let it handle all keys (including esc to cancel filter)
+	if m.versionList.FilterState() == list.Filtering {
+		var cmd tea.Cmd
+		m.versionList, cmd = m.versionList.Update(msg)
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "q":
 		return m.closeToolPicker(), nil

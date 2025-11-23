@@ -156,13 +156,13 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
+	// When picker is open, route messages to the picker (lists need all msg types for filtering)
+	if m.pickerState != pickerClosed {
+		return m.handlePickerUpdate(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		// Handle picker keys first if picker is open
-		if m.pickerState != pickerClosed {
-			newModel, newCmd := m.handlePickerKeys(msg)
-			return newModel, newCmd
-		}
 		// Handle keys differently based on whether we're showing output
 		if m.showOutput {
 			return m.handleOutputKeys(msg)
