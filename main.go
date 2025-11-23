@@ -324,9 +324,6 @@ func hideAllEnvVars(m model) model {
 
 // refreshEnvVarsTable rebuilds the env vars table rows based on current mask state.
 func refreshEnvVarsTable(m model) model {
-	// Remember the current cursor position
-	cursor := m.envVarsTable.Cursor()
-
 	rows := make([]table.Row, 0, len(m.envVars))
 	for _, ev := range m.envVars {
 		displayValue := maskValue(ev.Value)
@@ -335,15 +332,9 @@ func refreshEnvVarsTable(m model) model {
 		}
 		rows = append(rows, table.Row{ev.Name, displayValue})
 	}
-	m.envVarsTable = newTable(getEnvVarsTableConfig(), rows, m.focus == focusEnvVars)
 
-	// Restore the cursor position
-	m.envVarsTable.SetCursor(cursor)
-
-	// Re-apply width settings if we have window dimensions
-	if m.windowWidth > 0 {
-		m = updateTableWidths(m)
-	}
+	// Update rows on existing table instead of recreating
+	m.envVarsTable.SetRows(rows)
 
 	return m
 }
@@ -451,15 +442,14 @@ func getEnvVarsTableConfig() tableConfig {
 
 // newTable creates a table with the given configuration.
 func newTable(cfg tableConfig, rows []table.Row, focused bool) table.Model {
-	const headerOffset = 2
 	t := table.New(
 		table.WithColumns(cfg.columns),
 		table.WithRows(rows),
 		table.WithFocused(focused),
 		table.WithStyles(tableStyles()),
 		table.WithWidth(cfg.width),
+		table.WithHeight(minTableHeight), // Start with minimum, updateTableLayout will adjust
 	)
-	t.SetHeight(len(rows) + headerOffset)
 	return t
 }
 
@@ -511,7 +501,100 @@ func (m model) Init() tea.Cmd {
 const (
 	tablePadding  = 4 // padding for table borders
 	columnPadding = 5 // padding between columns
+
+	// Vertical layout constants.
+	minTableHeight     = 4 // minimum rows to show (header + at least 1 data row + border)
+	headerLines        = 3 // header block (title + version + blank line)
+	sectionTitleLines  = 1 // each section title
+	sectionSpacerLines = 1 // blank line between sections
+	helpLines          = 2 // help text + blank line before it
+	numTables          = 3 // tasks, tools, env vars
 )
+
+// calculateTableHeights distributes available vertical space among tables.
+// Returns heights for tasks, tools, and envVars tables.
+func calculateTableHeights(windowHeight, taskRows, toolRows, envVarRows int) (int, int, int) {
+	if windowHeight == 0 {
+		return minTableHeight, minTableHeight, minTableHeight
+	}
+
+	// Calculate overhead: header + 3 section titles + 3 spacers + help
+	overhead := headerLines + (numTables * sectionTitleLines) + (numTables * sectionSpacerLines) + helpLines
+	availableHeight := windowHeight - overhead
+
+	if availableHeight < numTables*minTableHeight {
+		// Not enough space, give minimum to each
+		return minTableHeight, minTableHeight, minTableHeight
+	}
+
+	// Calculate how much each table needs (rows + header line)
+	const tableHeaderHeight = 2 // header row + border
+	taskNeeds := taskRows + tableHeaderHeight
+	toolNeeds := toolRows + tableHeaderHeight
+	envVarNeeds := envVarRows + tableHeaderHeight
+
+	totalNeeds := taskNeeds + toolNeeds + envVarNeeds
+
+	if totalNeeds <= availableHeight {
+		// Everything fits, give each table what it needs
+		return taskNeeds, toolNeeds, envVarNeeds
+	}
+
+	// Not everything fits - distribute proportionally with minimums
+	// First, ensure minimums
+	taskHeight := minTableHeight
+	toolHeight := minTableHeight
+	envVarHeight := minTableHeight
+	remaining := availableHeight - (numTables * minTableHeight)
+
+	if remaining > 0 {
+		// Distribute extra space proportionally based on row counts
+		totalRows := taskRows + toolRows + envVarRows
+		if totalRows > 0 {
+			taskExtra := (remaining * taskRows) / totalRows
+			toolExtra := (remaining * toolRows) / totalRows
+			envVarExtra := remaining - taskExtra - toolExtra // give remainder to last
+
+			taskHeight += taskExtra
+			toolHeight += toolExtra
+			envVarHeight += envVarExtra
+		} else {
+			// No rows, distribute evenly
+			each := remaining / numTables
+			taskHeight += each
+			toolHeight += each
+			envVarHeight += remaining - (numTables-1)*each
+		}
+	}
+
+	return taskHeight, toolHeight, envVarHeight
+}
+
+// updateTableLayout adjusts table widths and heights based on the current terminal size.
+func updateTableLayout(m model) model {
+	if m.windowWidth == 0 {
+		return m
+	}
+
+	// Calculate heights based on available space and row counts
+	taskHeight, toolHeight, envVarHeight := calculateTableHeights(
+		m.windowHeight,
+		len(m.tasks),
+		len(m.tools),
+		len(m.envVars),
+	)
+
+	m.tasksTable.SetHeight(taskHeight)
+	m.toolsTable.SetHeight(toolHeight)
+	m.envVarsTable.SetHeight(envVarHeight)
+
+	// Force viewport update after height change
+	m.tasksTable.UpdateViewport()
+	m.toolsTable.UpdateViewport()
+	m.envVarsTable.UpdateViewport()
+
+	return updateTableWidths(m)
+}
 
 // updateTableWidths adjusts table widths based on the current terminal width.
 func updateTableWidths(m model) model {
@@ -534,7 +617,10 @@ func updateTableWidths(m model) model {
 	// Tools table: Name + Version + Requested columns (expand last column for consistent divider)
 	toolsNameWidth := colWidthName
 	toolsVersionWidth := colWidthVersion
-	toolsRequestedWidth := max(availableWidth-toolsNameWidth-toolsVersionWidth-columnPadding-columnPadding, colWidthVersion)
+	toolsRequestedWidth := max(
+		availableWidth-toolsNameWidth-toolsVersionWidth-columnPadding-columnPadding,
+		colWidthVersion,
+	)
 	m.toolsTable.SetColumns([]table.Column{
 		{Title: "Name", Width: toolsNameWidth},
 		{Title: "Version", Width: toolsVersionWidth},
@@ -573,19 +659,17 @@ func handleTasksLoaded(m model, msg tasksLoadedMsg) model {
 	m.tasks = msg.tasks
 	m.tasksLoading = false
 
-	// Preserve cursor position
-	cursor := m.tasksTable.Cursor()
-
 	rows := make([]table.Row, 0, len(m.tasks))
 	for _, task := range m.tasks {
 		rows = append(rows, table.Row{task.Name, task.Description})
 	}
-	m.tasksTable = newTable(getTasksTableConfig(), rows, m.focus == focusTasks)
-	m.tasksTable.SetCursor(cursor)
 
-	// Re-apply width settings if we have window dimensions
+	// Update rows on existing table instead of recreating
+	m.tasksTable.SetRows(rows)
+
+	// Re-apply layout settings if we have window dimensions
 	if m.windowWidth > 0 {
-		m = updateTableWidths(m)
+		m = updateTableLayout(m)
 	}
 	return m
 }
@@ -609,19 +693,17 @@ func handleToolsLoaded(m model, msg toolsLoadedMsg) model {
 	m.tools = msg.tools
 	m.toolsLoading = false
 
-	// Preserve cursor position
-	cursor := m.toolsTable.Cursor()
-
 	rows := make([]table.Row, 0, len(m.tools))
 	for _, tool := range m.tools {
 		rows = append(rows, table.Row{tool.Name, tool.Version, tool.RequestedVersion})
 	}
-	m.toolsTable = newTable(getToolsTableConfig(), rows, m.focus == focusTools)
-	m.toolsTable.SetCursor(cursor)
 
-	// Re-apply width settings if we have window dimensions
+	// Update rows on existing table instead of recreating
+	m.toolsTable.SetRows(rows)
+
+	// Re-apply layout settings if we have window dimensions
 	if m.windowWidth > 0 {
-		m = updateTableWidths(m)
+		m = updateTableLayout(m)
 	}
 	return m
 }
@@ -660,9 +742,6 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 	m.envVars = msg.envVars
 	m.envVarsLoading = false
 
-	// Preserve cursor position
-	cursor := m.envVarsTable.Cursor()
-
 	rows := make([]table.Row, 0, len(m.envVars))
 	for _, ev := range m.envVars {
 		displayValue := maskValue(ev.Value)
@@ -671,12 +750,13 @@ func handleEnvVarsLoaded(m model, msg envVarsLoadedMsg) model {
 		}
 		rows = append(rows, table.Row{ev.Name, displayValue})
 	}
-	m.envVarsTable = newTable(getEnvVarsTableConfig(), rows, m.focus == focusEnvVars)
-	m.envVarsTable.SetCursor(cursor)
 
-	// Re-apply width settings if we have window dimensions
+	// Update rows on existing table instead of recreating
+	m.envVarsTable.SetRows(rows)
+
+	// Re-apply layout settings if we have window dimensions
 	if m.windowWidth > 0 {
-		m = updateTableWidths(m)
+		m = updateTableLayout(m)
 	}
 	return m
 }
@@ -753,8 +833,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 			m.viewport.SetContent(strings.Join(m.output, "\n"))
 		} else {
-			// Update table widths based on terminal width
-			m = updateTableWidths(m)
+			// Update table layout based on terminal size
+			m = updateTableLayout(m)
 		}
 		return m, nil
 	}
@@ -1034,6 +1114,9 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 	}
 
 	m := &model{
+		tasksTable:     newTable(getTasksTableConfig(), nil, true),
+		toolsTable:     newTable(getToolsTableConfig(), nil, false),
+		envVarsTable:   newTable(getEnvVarsTableConfig(), nil, false),
 		tasksLoading:   true,
 		toolsLoading:   true,
 		envVarsLoading: true,
