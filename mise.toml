@@ -15,7 +15,7 @@ run = "rm -f debug.log"
 description = "Clear the debug.log file"
 
 [tasks.run]
-run = "go run ."
+run = "go run . -debug"
 depends = ["clean-debug"]
 alias = "gor"
 description = "Run the application"
