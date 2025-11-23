@@ -2,6 +2,7 @@
 go = '1.25.4'
 golangci-lint = "2.6.2"
 goreleaser = "2.12.7"
+svu = "3.3.0"
 
 [env]
 CGO_ENABLED = "0"
@@ -40,3 +41,23 @@ description = "Run go vet"
 [tasks.check]
 depends = ["fmt", "vet", "lint", "test"]
 description = "Run all checks (fmt, vet, lint, test)"
+
+[tasks."release:version"]
+run = "svu next"
+description = "Show the next semantic version"
+
+[tasks."release:snapshot"]
+run = "goreleaser release --snapshot --clean"
+description = "Build a local snapshot release"
+
+[tasks.release]
+run = """
+set -e
+VERSION=$(svu next)
+echo "Releasing version: $VERSION"
+git tag -a "$VERSION" -m "Release $VERSION"
+git push origin "$VERSION"
+goreleaser release --clean
+"""
+depends = ["check"]
+description = "Create and publish a new release"
