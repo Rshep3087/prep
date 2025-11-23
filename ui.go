@@ -45,6 +45,9 @@ const (
 // viewportHeaderFooterHeight is the space reserved for header and footer in output view.
 const viewportHeaderFooterHeight = 4
 
+// pickerListPadding is the space reserved for header/footer in picker views.
+const pickerListPadding = 4
+
 // tableConfig holds configuration for creating a table.
 type tableConfig struct {
 	columns []table.Column

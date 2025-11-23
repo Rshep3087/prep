@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -20,6 +21,12 @@ import (
 
 // debounceInterval is the minimum time between file change reloads.
 const debounceInterval = 500 * time.Millisecond
+
+// Key constants for common key bindings.
+const (
+	keyEsc   = "esc"
+	keyEnter = "enter"
+)
 
 // handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
 func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
@@ -205,10 +212,10 @@ func (m model) handleFileChanged(msg watcher.FileChangedMsg) (model, tea.Cmd) {
 // Returns (model, cmd, handled) where handled indicates if the key was consumed.
 func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 	switch msg.String() {
-	case "q", "ctrl+c", "esc":
+	case "q", "ctrl+c", keyEsc:
 		watcher.Close(m.watcher)
 		return m, tea.Quit, true
-	case "enter":
+	case keyEnter:
 		// Only run tasks when focused on tasks table
 		if m.focus == focusTasks && len(m.tasks) > 0 {
 			selectedRow := m.tasksTable.SelectedRow()
@@ -252,6 +259,11 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 			m = hideAllEnvVars(m)
 			return m, nil, true
 		}
+	case "a":
+		// Add tool (only when focused on tools table)
+		if m.focus == focusTools {
+			return m.openToolPicker()
+		}
 	}
 	// Key not handled - let tables process it
 	return m, nil, false
@@ -260,7 +272,7 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 // handleOutputKeys handles key presses in the output view.
 func (m model) handleOutputKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "esc":
+	case "q", keyEsc:
 		// Close output view (only if task is not running)
 		if !m.taskRunning {
 			m.showOutput = false
@@ -423,4 +435,213 @@ func (m model) startTask(taskName string) (model, tea.Cmd) {
 	m.cancelFunc = cancel
 
 	return m, runTask(ctx, taskName, m.sender)
+}
+
+// openToolPicker opens the tool picker and starts loading the registry.
+func (m model) openToolPicker() (model, tea.Cmd, bool) {
+	m.logger.Debug("opening tool picker")
+	m.pickerState = pickerSelectTool
+
+	// Initialize empty list while loading
+	delegate := list.NewDefaultDelegate()
+	width := m.windowWidth
+	height := m.windowHeight
+	if width == 0 {
+		width = 80
+	}
+	if height == 0 {
+		height = 24
+	}
+
+	m.toolList = list.New([]list.Item{}, delegate, width, height-pickerListPadding)
+	m.toolList.Title = "Select a Tool to Install"
+	m.toolList.SetShowStatusBar(true)
+	m.toolList.SetFilteringEnabled(true)
+
+	// Start loading registry
+	ctx := context.Background()
+	return m, loader.LoadMiseRegistry(ctx, m.runner), true
+}
+
+// closeToolPicker closes the tool picker and resets state.
+func (m model) closeToolPicker() model {
+	m.logger.Debug("closing tool picker")
+	m.pickerState = pickerClosed
+	m.selectedTool = ""
+	m.versionsLoading = false
+	return m
+}
+
+// handleRegistryLoaded processes the registry loaded message.
+func (m model) handleRegistryLoaded(msg loader.RegistryLoadedMsg) model {
+	if msg.Err != nil {
+		m.logger.Error("error loading registry", "error", msg.Err)
+		m.pickerState = pickerClosed
+		return m
+	}
+
+	m.logger.Debug("loaded registry", "count", len(msg.Tools))
+
+	// Convert to list items
+	items := make([]list.Item, len(msg.Tools))
+	for i, tool := range msg.Tools {
+		items[i] = toolItem{name: tool.Name, backend: tool.Backend}
+	}
+
+	m.toolList.SetItems(items)
+	return m
+}
+
+// handleVersionsLoaded processes the versions loaded message.
+func (m model) handleVersionsLoaded(msg loader.VersionsLoadedMsg) model {
+	m.versionsLoading = false
+
+	if msg.Err != nil {
+		m.logger.Error("error loading versions", "error", msg.Err)
+		// Go back to tool selection
+		m.pickerState = pickerSelectTool
+		return m
+	}
+
+	m.logger.Debug("loaded versions", "tool", msg.Tool, "count", len(msg.Versions))
+
+	// Initialize version list
+	delegate := list.NewDefaultDelegate()
+	width := m.windowWidth
+	height := m.windowHeight
+	if width == 0 {
+		width = 80
+	}
+	if height == 0 {
+		height = 24
+	}
+
+	items := make([]list.Item, len(msg.Versions))
+	for i, v := range msg.Versions {
+		items[i] = versionItem{version: v}
+	}
+
+	m.versionList = list.New(items, delegate, width, height-pickerListPadding)
+	m.versionList.Title = fmt.Sprintf("Select version for: %s", m.selectedTool)
+	m.versionList.SetShowStatusBar(true)
+	m.versionList.SetFilteringEnabled(true)
+
+	m.pickerState = pickerSelectVersion
+	return m
+}
+
+// handleToolInstalled processes the tool installed message.
+func (m model) handleToolInstalled(msg loader.ToolInstalledMsg) (model, tea.Cmd) {
+	if msg.Err != nil {
+		m.logger.Error("error installing tool", "tool", msg.Tool, "version", msg.Version, "error", msg.Err)
+		m.pickerState = pickerClosed
+		return m, nil
+	}
+
+	m.logger.Debug("tool installed", "tool", msg.Tool, "version", msg.Version)
+	m.pickerState = pickerClosed
+	m.selectedTool = ""
+
+	// Reload tools to show the new tool
+	ctx := context.Background()
+	return m, loader.LoadMiseTools(ctx, m.runner)
+}
+
+// handlePickerKeys handles key presses in the picker views.
+func (m model) handlePickerKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	switch m.pickerState {
+	case pickerClosed:
+		// Should not reach here, but handle for completeness
+		return m, nil
+	case pickerSelectTool:
+		return m.handleToolListKeys(msg)
+	case pickerSelectVersion:
+		return m.handleVersionListKeys(msg)
+	case pickerLoadingVersions, pickerInstalling:
+		// Only allow escape during loading/installing
+		if msg.String() == keyEsc || msg.String() == "q" {
+			return m.closeToolPicker(), nil
+		}
+	}
+	return m, nil
+}
+
+// handleToolListKeys handles keys when selecting a tool.
+func (m model) handleToolListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	switch msg.String() {
+	case keyEsc, "q":
+		return m.closeToolPicker(), nil
+	case keyEnter:
+		if item := m.toolList.SelectedItem(); item != nil {
+			tool, ok := item.(toolItem)
+			if !ok {
+				return m, nil
+			}
+			m.selectedTool = tool.name
+			m.pickerState = pickerLoadingVersions
+			m.versionsLoading = true
+			m.logger.Debug("loading versions for tool", "tool", tool.name)
+			ctx := context.Background()
+			return m, loader.LoadToolVersions(ctx, m.runner, tool.name)
+		}
+		return m, nil
+	}
+
+	// Let list handle other keys (navigation, filtering)
+	var cmd tea.Cmd
+	m.toolList, cmd = m.toolList.Update(msg)
+	return m, cmd
+}
+
+// handleVersionListKeys handles keys when selecting a version.
+func (m model) handleVersionListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return m.closeToolPicker(), nil
+	case keyEsc:
+		// Go back to tool selection
+		m.pickerState = pickerSelectTool
+		return m, nil
+	case keyEnter:
+		if item := m.versionList.SelectedItem(); item != nil {
+			version, ok := item.(versionItem)
+			if !ok {
+				return m, nil
+			}
+			m.pickerState = pickerInstalling
+			m.logger.Debug("installing tool", "tool", m.selectedTool, "version", version.version)
+			ctx := context.Background()
+			return m, loader.InstallTool(ctx, m.runner, m.selectedTool, version.version)
+		}
+		return m, nil
+	}
+
+	// Let list handle other keys (navigation, filtering)
+	var cmd tea.Cmd
+	m.versionList, cmd = m.versionList.Update(msg)
+	return m, cmd
+}
+
+func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
+	m.windowWidth = msg.Width
+	m.windowHeight = msg.Height
+	switch m.pickerState {
+	case pickerSelectTool:
+		m.toolList.SetSize(msg.Width, msg.Height-pickerListPadding)
+	case pickerSelectVersion:
+		m.versionList.SetSize(msg.Width, msg.Height-pickerListPadding)
+	case pickerClosed, pickerLoadingVersions, pickerInstalling:
+		// No list to resize
+	}
+	if m.showOutput {
+		m.viewport = viewport.New(
+			viewport.WithWidth(msg.Width),
+			viewport.WithHeight(msg.Height-viewportHeaderFooterHeight),
+		)
+		m.viewport.SetContent(strings.Join(m.output, "\n"))
+	} else {
+		// Update table layout based on terminal size
+		m = updateTableLayout(m)
+	}
+	return m
 }

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -54,6 +54,46 @@ type taskDoneMsg struct {
 	err error
 }
 
+// pickerState represents the state of the tool installation picker.
+type pickerState int
+
+const (
+	pickerClosed          pickerState = iota // picker not showing
+	pickerSelectTool                         // showing tool list
+	pickerLoadingVersions                    // loading versions for selected tool
+	pickerSelectVersion                      // showing version list
+	pickerInstalling                         // installing tool@version
+)
+
+// toolItem represents a tool in the picker list.
+type toolItem struct {
+	name    string
+	backend string
+}
+
+// FilterValue implements list.Item.
+func (t toolItem) FilterValue() string { return t.name }
+
+// Title implements list.DefaultItem.
+func (t toolItem) Title() string { return t.name }
+
+// Description implements list.DefaultItem.
+func (t toolItem) Description() string { return t.backend }
+
+// versionItem represents a version in the picker list.
+type versionItem struct {
+	version string
+}
+
+// FilterValue implements list.Item.
+func (v versionItem) FilterValue() string { return v.version }
+
+// Title implements list.DefaultItem.
+func (v versionItem) Title() string { return v.version }
+
+// Description implements list.DefaultItem.
+func (v versionItem) Description() string { return "" }
+
 type model struct {
 	tasksTable     table.Model
 	toolsTable     table.Model
@@ -91,6 +131,13 @@ type model struct {
 	watcher     *fsnotify.Watcher // watches config files for changes
 	configPaths []string          // paths being watched
 	lastReload  time.Time         // for debouncing file change events
+
+	// Tool picker state
+	pickerState     pickerState // current picker state
+	toolList        list.Model  // list of available tools
+	versionList     list.Model  // list of versions for selected tool
+	selectedTool    string      // tool selected in first step
+	versionsLoading bool        // loading versions
 }
 
 func (m model) Init() tea.Cmd {
@@ -111,6 +158,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// Handle picker keys first if picker is open
+		if m.pickerState != pickerClosed {
+			newModel, newCmd := m.handlePickerKeys(msg)
+			return newModel, newCmd
+		}
 		// Handle keys differently based on whether we're showing output
 		if m.showOutput {
 			return m.handleOutputKeys(msg)
@@ -143,27 +195,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loader.ConfigFilesLoadedMsg:
 		return m.handleConfigFilesLoaded(msg), nil
 
+	case loader.RegistryLoadedMsg:
+		return m.handleRegistryLoaded(msg), nil
+
+	case loader.VersionsLoadedMsg:
+		return m.handleVersionsLoaded(msg), nil
+
+	case loader.ToolInstalledMsg:
+		return m.handleToolInstalled(msg)
+
 	case watcher.FileChangedMsg:
 		return m.handleFileChanged(msg)
 
 	case tea.WindowSizeMsg:
-		m.windowWidth = msg.Width
-		m.windowHeight = msg.Height
-		if m.showOutput {
-			m.viewport = viewport.New(
-				viewport.WithWidth(msg.Width),
-				viewport.WithHeight(msg.Height-viewportHeaderFooterHeight),
-			)
-			m.viewport.SetContent(strings.Join(m.output, "\n"))
-		} else {
-			// Update table layout based on terminal size
-			m = updateTableLayout(m)
-		}
-		return m, nil
+		return m.handleWindowSize(msg), nil
 	}
 
-	// Update the focused table with any other messages (only when not showing output)
-	if !m.showOutput && !m.tasksLoading && !m.toolsLoading && !m.envVarsLoading && m.err == nil {
+	// Update the focused table with any other messages (only when not showing output or picker)
+	canUpdateTables := !m.showOutput && m.pickerState == pickerClosed &&
+		!m.tasksLoading && !m.toolsLoading && !m.envVarsLoading && m.err == nil
+	if canUpdateTables {
 		switch m.focus {
 		case focusTasks:
 			m.tasksTable, cmd = m.tasksTable.Update(msg)
@@ -197,6 +248,11 @@ func (m model) renderHeader() string {
 // View renders the program's UI, which can be a string or a [Layer]. The
 // view is rendered after every Update.
 func (m model) View() tea.View {
+	// Show picker view if picker is open
+	if m.pickerState != pickerClosed {
+		return m.renderPickerView()
+	}
+
 	// Show output view if running or viewing task output
 	if m.showOutput {
 		return m.renderOutputView()
@@ -223,6 +279,8 @@ func (m model) View() tea.View {
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • q to quit")
 	case focusEnvVars:
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • v show • V show all • h hide all • q to quit")
+	case focusTools:
+		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • a to add tool • q to quit")
 	default:
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • q to quit")
 	}
@@ -243,6 +301,41 @@ func (m model) View() tea.View {
 		"",
 		help,
 	)
+
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
+}
+
+// renderPickerView renders the tool picker overlay.
+func (m model) renderPickerView() tea.View {
+	var content string
+
+	switch m.pickerState {
+	case pickerClosed:
+		// Should not reach here, but handle for completeness
+		content = ""
+	case pickerSelectTool:
+		help := m.styles.help.Render("Enter to select • / to filter • Esc/q to close")
+		content = lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.toolList.View(),
+			"",
+			help,
+		)
+	case pickerLoadingVersions:
+		content = fmt.Sprintf("Loading versions for %s...", m.selectedTool)
+	case pickerSelectVersion:
+		help := m.styles.help.Render("Enter to install • / to filter • Esc to go back • q to close")
+		content = lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.versionList.View(),
+			"",
+			help,
+		)
+	case pickerInstalling:
+		content = fmt.Sprintf("Installing %s...", m.selectedTool)
+	}
 
 	v := tea.NewView(content)
 	v.AltScreen = true

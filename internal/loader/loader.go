@@ -10,6 +10,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// minRegistryFields is the minimum number of fields expected in a registry line.
+const minRegistryFields = 2
+
 // CommandRunner runs commands.
 type CommandRunner interface {
 	Run(ctx context.Context, args ...string) ([]byte, error)
@@ -85,6 +88,32 @@ type miseConfigEntry struct {
 type ConfigFilesLoadedMsg struct {
 	Paths []string
 	Err   error
+}
+
+// RegistryTool represents a tool from the mise registry.
+type RegistryTool struct {
+	Name    string
+	Backend string
+}
+
+// RegistryLoadedMsg is sent when mise registry data is loaded.
+type RegistryLoadedMsg struct {
+	Tools []RegistryTool
+	Err   error
+}
+
+// VersionsLoadedMsg is sent when versions are loaded for a tool.
+type VersionsLoadedMsg struct {
+	Tool     string
+	Versions []string
+	Err      error
+}
+
+// ToolInstalledMsg is sent when tool installation completes.
+type ToolInstalledMsg struct {
+	Tool    string
+	Version string
+	Err     error
 }
 
 // ReloadMiseData returns commands to reload all mise data.
@@ -204,4 +233,70 @@ func LoadMiseConfigFiles(ctx context.Context, runner CommandRunner) tea.Cmd {
 		},
 		func(err error) tea.Msg { return ConfigFilesLoadedMsg{Err: err} },
 	)
+}
+
+// LoadMiseRegistry returns a Cmd that loads available tools from mise registry.
+func LoadMiseRegistry(ctx context.Context, runner CommandRunner) tea.Cmd {
+	return func() tea.Msg {
+		output, err := runner.Run(ctx, "mise", "registry")
+		if err != nil {
+			return RegistryLoadedMsg{Err: fmt.Errorf("failed to load registry: %w", err)}
+		}
+
+		var tools []RegistryTool
+		lines := strings.SplitSeq(string(output), "\n")
+		for line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// Format: "toolname    backend:source [additional backends...]"
+			fields := strings.Fields(line)
+			if len(fields) >= minRegistryFields {
+				tools = append(tools, RegistryTool{
+					Name:    fields[0],
+					Backend: fields[1],
+				})
+			}
+		}
+		return RegistryLoadedMsg{Tools: tools}
+	}
+}
+
+// LoadToolVersions returns a Cmd that loads available versions for a tool.
+func LoadToolVersions(ctx context.Context, runner CommandRunner, tool string) tea.Cmd {
+	return func() tea.Msg {
+		output, err := runner.Run(ctx, "mise", "ls-remote", tool)
+		if err != nil {
+			return VersionsLoadedMsg{Tool: tool, Err: fmt.Errorf("failed to load versions: %w", err)}
+		}
+
+		var versions []string
+		lines := strings.SplitSeq(string(output), "\n")
+		for line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			versions = append(versions, line)
+		}
+
+		// Reverse to show newest first
+		for i, j := 0, len(versions)-1; i < j; i, j = i+1, j-1 {
+			versions[i], versions[j] = versions[j], versions[i]
+		}
+
+		return VersionsLoadedMsg{Tool: tool, Versions: versions}
+	}
+}
+
+// InstallTool returns a Cmd that installs a tool at a specific version.
+func InstallTool(ctx context.Context, runner CommandRunner, tool, version string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := runner.Run(ctx, "mise", "use", tool+"@"+version)
+		if err != nil {
+			return ToolInstalledMsg{Tool: tool, Version: version, Err: fmt.Errorf("failed to install: %w", err)}
+		}
+		return ToolInstalledMsg{Tool: tool, Version: version}
+	}
 }
