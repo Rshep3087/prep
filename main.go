@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"os/exec"
 
@@ -72,11 +75,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tasksLoadedMsg:
 		if msg.err != nil {
+			log.Printf("error loading tasks: %v", msg.err)
 			m.err = msg.err
 			m.loading = false
 			return m, nil
 		}
 
+		log.Printf("loaded %d tasks", len(msg.tasks))
 		m.tasks = msg.tasks
 		m.loading = false
 
@@ -91,14 +96,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			rows = append(rows, table.Row{task.Name, task.Description})
 		}
 
-		m.table = table.New(
-			table.WithColumns(columns),
-			table.WithRows(rows),
-			table.WithFocused(true),
-			table.WithHeight(50),
-		)
-
-		// Set table styles
+		// Set table styles first
 		s := table.DefaultStyles()
 		s.Header = s.Header.
 			BorderStyle(lipgloss.NormalBorder()).
@@ -111,7 +109,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Bold(false)
 		s.Cell = s.Cell.
 			Foreground(lipgloss.Color("255"))
-		m.table.SetStyles(s)
+
+		m.table = table.New(
+			table.WithColumns(columns),
+			table.WithRows(rows),
+			table.WithFocused(true),
+			table.WithStyles(s),
+			table.WithWidth(82), // 20 + 60 + padding
+		)
+		// Set height after table creation so header height is calculated correctly
+		m.table.SetHeight(len(rows) + 2)
 
 		return m, nil
 
@@ -143,6 +150,8 @@ func (m model) View() tea.View {
 		return tea.NewView("No mise tasks found.\n\nPress q to quit.\n")
 	}
 
+	tableView := m.table.View()
+
 	// Create lipgloss layers for better rendering
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
@@ -155,7 +164,7 @@ func (m model) View() tea.View {
 		lipgloss.Left,
 		title,
 		"",
-		m.table.View(),
+		tableView,
 		"",
 		help,
 	)
@@ -163,20 +172,38 @@ func (m model) View() tea.View {
 	return tea.NewView(content)
 }
 
-func run(_ context.Context) error {
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	debug := fs.Bool("debug", false, "enable debug logging to debug.log")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	if *debug {
+		lf, err := tea.LogToFile("debug.log", "debug")
+		if err != nil {
+			return fmt.Errorf("setup logging to file: %v", err)
+		}
+		defer lf.Close()
+		log.Println("debug logging enabled")
+	} else {
+		log.SetOutput(io.Discard)
+	}
+
 	m := &model{
 		loading: true,
 	}
-	program := tea.NewProgram(m)
+	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
 	_, err := program.Run()
 	return err
 }
 
 func main() {
 	ctx := context.Background()
-	err := run(ctx)
+	err := run(ctx, os.Args, os.Stdin, os.Stdout, os.Stderr)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
