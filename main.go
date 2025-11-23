@@ -109,6 +109,12 @@ type taskDoneMsg struct {
 	err error
 }
 
+// miseVersionMsg is sent when mise version is loaded.
+type miseVersionMsg struct {
+	version string
+	err     error
+}
+
 // loadJSON is a generic loader that runs a command and unmarshals JSON.
 func loadJSON[T any](
 	ctx context.Context,
@@ -185,6 +191,23 @@ func loadMiseEnvVars(ctx context.Context, runner CommandRunner) tea.Cmd {
 		},
 		func(err error) tea.Msg { return envVarsLoadedMsg{err: err} },
 	)
+}
+
+// loadMiseVersion returns a Cmd that loads the mise version asynchronously.
+func loadMiseVersion(ctx context.Context, runner CommandRunner) tea.Cmd {
+	return func() tea.Msg {
+		output, err := runner.Run(ctx, "mise", "--version")
+		if err != nil {
+			return miseVersionMsg{err: err}
+		}
+		// mise --version outputs something like "2024.12.0 macos-arm64 (2024-12-01)"
+		// We just want the version number
+		version := strings.TrimSpace(string(output))
+		if parts := strings.Fields(version); len(parts) > 0 {
+			version = parts[0]
+		}
+		return miseVersionMsg{version: version}
+	}
 }
 
 // runTask executes a mise task and streams output back to the TUI.
@@ -292,6 +315,18 @@ func (s styles) renderTitle(name string, focused bool) string {
 	return s.dimTitle.Render(name)
 }
 
+// renderHeader renders the application header with branding and mise version.
+func (m model) renderHeader() string {
+	tagline := m.styles.title.Render("prep") + m.styles.dimTitle.Render(" — mise en place, now prep")
+
+	var versionLine string
+	if m.miseVersion != "" {
+		versionLine = m.styles.help.Render("mise v" + m.miseVersion)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, tagline, versionLine)
+}
+
 // getTasksTableConfig returns the table configuration for tasks.
 func getTasksTableConfig() tableConfig {
 	return tableConfig{
@@ -353,6 +388,9 @@ type model struct {
 	envVarsLoading bool
 	err            error
 
+	// Mise info for header
+	miseVersion string
+
 	// Task execution state
 	showOutput   bool               // whether to show the output viewport
 	runningTask  string             // name of the task being run
@@ -376,6 +414,7 @@ func (m model) Init() tea.Cmd {
 		loadMiseTasks(ctx, m.runner),
 		loadMiseTools(ctx, m.runner),
 		loadMiseEnvVars(ctx, m.runner),
+		loadMiseVersion(ctx, m.runner),
 	)
 }
 
@@ -530,6 +569,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case envVarsLoadedMsg:
 		return handleEnvVarsLoaded(m, msg), nil
+
+	case miseVersionMsg:
+		if msg.err != nil {
+			log.Printf("error loading mise version: %v", msg.err)
+		} else {
+			m.miseVersion = msg.version
+			log.Printf("loaded mise version: %s", msg.version)
+		}
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
@@ -706,6 +754,7 @@ func (m model) View() tea.View {
 	}
 
 	// Build sections using shared renderTitle helper
+	header := m.renderHeader()
 	tasksTitle := m.styles.renderTitle("Tasks", m.focus == focusTasks)
 	toolsTitle := m.styles.renderTitle("Tools", m.focus == focusTools)
 	envVarsTitle := m.styles.renderTitle("Environment Variables", m.focus == focusEnvVars)
@@ -714,6 +763,8 @@ func (m model) View() tea.View {
 	// Build the view using JoinVertical
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
+		header,
+		"",
 		tasksTitle,
 		m.tasksTable.View(),
 		"",
