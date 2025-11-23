@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/fsnotify/fsnotify"
 )
 
 // CommandRunner runs commands.
@@ -118,27 +120,27 @@ type miseVersionMsg struct {
 	err     error
 }
 
-// tickMsg is sent periodically to trigger a refresh of mise data.
-type tickMsg time.Time
-
-// refreshInterval is how often to poll mise for changes.
-const refreshInterval = 2 * time.Second
-
-// doTick returns a command that sends a tickMsg after the refresh interval.
-func doTick() tea.Cmd {
-	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
+// fileChangedMsg is sent when a watched config file changes.
+type fileChangedMsg struct {
+	path string
 }
 
-// reloadMiseData returns commands to reload all mise data and schedule the next tick.
+// configFilesLoadedMsg is sent when config file paths are loaded from mise.
+type configFilesLoadedMsg struct {
+	paths []string
+	err   error
+}
+
+// debounceInterval is the minimum time between file change reloads.
+const debounceInterval = 500 * time.Millisecond
+
+// reloadMiseData returns commands to reload all mise data.
 func reloadMiseData(runner CommandRunner) tea.Cmd {
 	ctx := context.Background()
 	return tea.Batch(
 		loadMiseTasks(ctx, runner),
 		loadMiseTools(ctx, runner),
 		loadMiseEnvVars(ctx, runner),
-		doTick(),
 	)
 }
 
@@ -234,6 +236,87 @@ func loadMiseVersion(ctx context.Context, runner CommandRunner) tea.Cmd {
 			version = parts[0]
 		}
 		return miseVersionMsg{version: version}
+	}
+}
+
+// miseConfigEntry represents a config file entry from mise cfg --json.
+type miseConfigEntry struct {
+	Path string `json:"path"`
+}
+
+// loadMiseConfigFiles returns a Cmd that loads config file paths from mise.
+func loadMiseConfigFiles(ctx context.Context, runner CommandRunner) tea.Cmd {
+	return loadJSON(ctx, runner, []string{"mise", "cfg", "--json"},
+		func(configs []miseConfigEntry) tea.Msg {
+			paths := make([]string, len(configs))
+			for i, c := range configs {
+				paths[i] = c.Path
+			}
+			return configFilesLoadedMsg{paths: paths}
+		},
+		func(err error) tea.Msg { return configFilesLoadedMsg{err: err} },
+	)
+}
+
+// startFileWatcher creates an fsnotify watcher and monitors config files.
+// It watches parent directories (more reliable for editor saves) and filters
+// events to only the specified config files.
+func startFileWatcher(paths []string, sender MessageSender) (*fsnotify.Watcher, error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build a set of config file paths for filtering
+	configFiles := make(map[string]bool)
+	for _, p := range paths {
+		configFiles[p] = true
+	}
+
+	// Add parent directories to watch
+	if addErr := addWatchDirs(watcher, paths); addErr != nil {
+		_ = watcher.Close()
+		return nil, addErr
+	}
+
+	// Start goroutine to listen for events
+	go watchLoop(watcher, configFiles, sender)
+
+	return watcher, nil
+}
+
+// addWatchDirs adds parent directories of the given paths to the watcher.
+func addWatchDirs(watcher *fsnotify.Watcher, paths []string) error {
+	watchedDirs := make(map[string]bool)
+	for _, p := range paths {
+		dir := filepath.Dir(p)
+		if watchedDirs[dir] {
+			continue
+		}
+		if err := watcher.Add(dir); err != nil {
+			return fmt.Errorf("watching %s: %w", dir, err)
+		}
+		watchedDirs[dir] = true
+	}
+	return nil
+}
+
+// watchLoop listens for fsnotify events and sends messages for matching config files.
+func watchLoop(watcher *fsnotify.Watcher, configFiles map[string]bool, sender MessageSender) {
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Write) && configFiles[event.Name] {
+				sender.Send(fileChangedMsg{path: event.Name})
+			}
+		case _, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+		}
 	}
 }
 
@@ -484,6 +567,11 @@ type model struct {
 	runner CommandRunner // for running commands
 	sender MessageSender // for sending messages to the program
 	styles styles        // UI styles
+
+	// File watching state
+	watcher     *fsnotify.Watcher // watches config files for changes
+	configPaths []string          // paths being watched
+	lastReload  time.Time         // for debouncing file change events
 }
 
 func (m model) Init() tea.Cmd {
@@ -493,7 +581,7 @@ func (m model) Init() tea.Cmd {
 		loadMiseTools(ctx, m.runner),
 		loadMiseEnvVars(ctx, m.runner),
 		loadMiseVersion(ctx, m.runner),
-		doTick(),
+		loadMiseConfigFiles(ctx, m.runner),
 	)
 }
 
@@ -772,6 +860,54 @@ func handleMiseVersion(m model, msg miseVersionMsg) model {
 	return m
 }
 
+// handleTaskOutput appends task output and updates the viewport.
+func handleTaskOutput(m model, msg taskOutputMsg) model {
+	m.output = append(m.output, msg.line)
+	m.viewport.SetContent(strings.Join(m.output, "\n"))
+	m.viewport.GotoBottom()
+	return m
+}
+
+// handleTaskDone processes task completion.
+func handleTaskDone(m model, msg taskDoneMsg) model {
+	m.taskRunning = false
+	m.taskErr = msg.err
+	m.cancelFunc = nil
+	if msg.err != nil {
+		log.Printf("task %s finished with error: %v", m.runningTask, msg.err)
+	} else {
+		log.Printf("task %s finished successfully", m.runningTask)
+	}
+	return m
+}
+
+// handleConfigFilesLoaded processes config files and starts the file watcher.
+func handleConfigFilesLoaded(m model, msg configFilesLoadedMsg) model {
+	if msg.err != nil {
+		log.Printf("error loading config files: %v", msg.err)
+		return m
+	}
+	m.configPaths = msg.paths
+	log.Printf("loaded %d config files to watch", len(msg.paths))
+	watcher, err := startFileWatcher(msg.paths, m.sender)
+	if err != nil {
+		log.Printf("error starting file watcher: %v", err)
+		return m
+	}
+	m.watcher = watcher
+	return m
+}
+
+// handleFileChanged processes file change events with debouncing.
+func handleFileChanged(m model, msg fileChangedMsg) (model, tea.Cmd) {
+	if time.Since(m.lastReload) < debounceInterval {
+		return m, nil
+	}
+	m.lastReload = time.Now()
+	log.Printf("config file changed: %s, reloading mise data", msg.path)
+	return m, reloadMiseData(m.runner)
+}
+
 // Update is called when a message is received. Use it to inspect messages
 // and, in response, update the model and/or send a command.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -791,21 +927,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Fall through to let tables handle navigation keys
 
 	case taskOutputMsg:
-		m.output = append(m.output, msg.line)
-		m.viewport.SetContent(strings.Join(m.output, "\n"))
-		m.viewport.GotoBottom()
-		return m, nil
+		return handleTaskOutput(m, msg), nil
 
 	case taskDoneMsg:
-		m.taskRunning = false
-		m.taskErr = msg.err
-		m.cancelFunc = nil
-		if msg.err != nil {
-			log.Printf("task %s finished with error: %v", m.runningTask, msg.err)
-		} else {
-			log.Printf("task %s finished successfully", m.runningTask)
-		}
-		return m, nil
+		return handleTaskDone(m, msg), nil
 
 	case tasksLoadedMsg:
 		return handleTasksLoaded(m, msg), nil
@@ -819,9 +944,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case miseVersionMsg:
 		return handleMiseVersion(m, msg), nil
 
-	case tickMsg:
-		// Reload mise data periodically to pick up config changes
-		return m, reloadMiseData(m.runner)
+	case configFilesLoadedMsg:
+		return handleConfigFilesLoaded(m, msg), nil
+
+	case fileChangedMsg:
+		return handleFileChanged(m, msg)
 
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
@@ -859,11 +986,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// closeWatcher safely closes the file watcher if it exists.
+func closeWatcher(w *fsnotify.Watcher) {
+	if w != nil {
+		_ = w.Close()
+	}
+}
+
 // handleMainKeys handles key presses in the main view (task list).
 // Returns (model, cmd, handled) where handled indicates if the key was consumed.
 func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
+		closeWatcher(m.watcher)
 		return m, tea.Quit, true
 	case "enter":
 		// Only run tasks when focused on tasks table
@@ -936,6 +1071,7 @@ func (m model) handleOutputKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// If not running, quit the app
 		if !m.taskRunning {
+			closeWatcher(m.watcher)
 			return m, tea.Quit
 		}
 		return m, nil
