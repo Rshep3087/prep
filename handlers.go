@@ -490,6 +490,7 @@ func (m model) closeToolPicker() model {
 	m.logger.Debug("closing tool picker")
 	m.pickerState = pickerClosed
 	m.selectedTool = ""
+	m.selectedVersion = ""
 	m.versionsLoading = false
 	return m
 }
@@ -610,6 +611,8 @@ func (m model) handlePickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolList, cmd = m.toolList.Update(msg)
 	case pickerSelectVersion:
 		m.versionList, cmd = m.versionList.Update(msg)
+	case pickerSelectConfig:
+		m.configList, cmd = m.configList.Update(msg)
 	case pickerClosed, pickerLoadingVersions, pickerInstalling:
 		// No list to update
 	}
@@ -626,6 +629,8 @@ func (m model) handlePickerKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m.handleToolListKeys(msg)
 	case pickerSelectVersion:
 		return m.handleVersionListKeys(msg)
+	case pickerSelectConfig:
+		return m.handleConfigListKeys(msg)
 	case pickerLoadingVersions, pickerInstalling:
 		// Only allow escape during loading/installing
 		if msg.String() == keyEsc || msg.String() == "q" {
@@ -691,10 +696,15 @@ func (m model) handleVersionListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			m.pickerState = pickerInstalling
-			m.logger.Debug("installing tool", "tool", m.selectedTool, "version", version.version)
-			ctx := context.Background()
-			return m, loader.InstallTool(ctx, m.runner, m.selectedTool, version.version)
+			m.selectedVersion = version.version
+			m.logger.Debug(
+				"version selected, showing config picker",
+				"tool", m.selectedTool,
+				"version", version.version,
+			)
+
+			// Initialize config list with available config files
+			return m.openConfigPicker()
 		}
 		return m, nil
 	}
@@ -702,6 +712,78 @@ func (m model) handleVersionListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	// Let list handle other keys (navigation, filtering)
 	var cmd tea.Cmd
 	m.versionList, cmd = m.versionList.Update(msg)
+	return m, cmd
+}
+
+// openConfigPicker opens the config file picker.
+func (m model) openConfigPicker() (model, tea.Cmd) {
+	m.logger.Debug("opening config picker", "configPaths", m.configPaths)
+	m.pickerState = pickerSelectConfig
+
+	// Initialize config list
+	delegate := list.NewDefaultDelegate()
+	width := m.windowWidth
+	height := m.windowHeight
+	if width == 0 {
+		width = 80
+	}
+	if height == 0 {
+		height = 24
+	}
+
+	items := make([]list.Item, len(m.configPaths))
+	for i, path := range m.configPaths {
+		items[i] = configItem{path: path}
+	}
+
+	m.configList = list.New(items, delegate, width, height-pickerListPadding)
+	m.configList.Title = fmt.Sprintf("Select config file for: %s@%s", m.selectedTool, m.selectedVersion)
+	m.configList.SetShowStatusBar(true)
+	m.configList.SetFilteringEnabled(true)
+
+	return m, nil
+}
+
+// handleConfigListKeys handles keys when selecting a config file.
+func (m model) handleConfigListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	// If the list is filtering, let it handle all keys (including esc to cancel filter)
+	if m.configList.FilterState() == list.Filtering {
+		var cmd tea.Cmd
+		m.configList, cmd = m.configList.Update(msg)
+		return m, cmd
+	}
+
+	switch msg.String() {
+	case "q":
+		return m.closeToolPicker(), nil
+	case keyEsc:
+		// Go back to version selection
+		m.pickerState = pickerSelectVersion
+		return m, nil
+	case keyEnter:
+		if item := m.configList.SelectedItem(); item != nil {
+			config, ok := item.(configItem)
+			if !ok {
+				return m, nil
+			}
+			m.pickerState = pickerInstalling
+			m.logger.Debug(
+				"installing tool",
+				"tool", m.selectedTool,
+				"version", m.selectedVersion,
+				"config", config.path,
+			)
+			ctx := context.Background()
+			return m, loader.InstallTool(
+				ctx, m.runner, m.selectedTool, m.selectedVersion, config.path,
+			)
+		}
+		return m, nil
+	}
+
+	// Let list handle other keys (navigation, filtering)
+	var cmd tea.Cmd
+	m.configList, cmd = m.configList.Update(msg)
 	return m, cmd
 }
 
@@ -713,6 +795,8 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
 		m.toolList.SetSize(msg.Width, msg.Height-pickerListPadding)
 	case pickerSelectVersion:
 		m.versionList.SetSize(msg.Width, msg.Height-pickerListPadding)
+	case pickerSelectConfig:
+		m.configList.SetSize(msg.Width, msg.Height-pickerListPadding)
 	case pickerClosed, pickerLoadingVersions, pickerInstalling:
 		// No list to resize
 	}

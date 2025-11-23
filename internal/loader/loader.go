@@ -298,9 +298,15 @@ func LoadToolVersions(ctx context.Context, runner CommandRunner, tool string) te
 }
 
 // InstallTool returns a Cmd that installs a tool at a specific version.
-func InstallTool(ctx context.Context, runner CommandRunner, tool, version string) tea.Cmd {
+// If configPath is provided, the tool will be added to that specific config file.
+func InstallTool(ctx context.Context, runner CommandRunner, tool, version, configPath string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := runner.Run(ctx, "mise", "use", tool+"@"+version)
+		args := []string{"mise", "use"}
+		if configPath != "" {
+			args = append(args, "--path", configPath)
+		}
+		args = append(args, tool+"@"+version)
+		_, err := runner.Run(ctx, args...)
 		if err != nil {
 			return ToolInstalledMsg{Tool: tool, Version: version, Err: fmt.Errorf("failed to install: %w", err)}
 		}

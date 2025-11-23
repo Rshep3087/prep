@@ -62,6 +62,7 @@ const (
 	pickerSelectTool                         // showing tool list
 	pickerLoadingVersions                    // loading versions for selected tool
 	pickerSelectVersion                      // showing version list
+	pickerSelectConfig                       // showing config file list
 	pickerInstalling                         // installing tool@version
 )
 
@@ -93,6 +94,20 @@ func (v versionItem) Title() string { return v.version }
 
 // Description implements list.DefaultItem.
 func (v versionItem) Description() string { return "" }
+
+// configItem represents a config file in the picker list.
+type configItem struct {
+	path string
+}
+
+// FilterValue implements list.Item.
+func (c configItem) FilterValue() string { return c.path }
+
+// Title implements list.DefaultItem.
+func (c configItem) Title() string { return c.path }
+
+// Description implements list.DefaultItem.
+func (c configItem) Description() string { return "" }
 
 type model struct {
 	tasksTable     table.Model
@@ -136,7 +151,9 @@ type model struct {
 	pickerState     pickerState // current picker state
 	toolList        list.Model  // list of available tools
 	versionList     list.Model  // list of versions for selected tool
+	configList      list.Model  // list of config files for installation target
 	selectedTool    string      // tool selected in first step
+	selectedVersion string      // version selected in second step
 	versionsLoading bool        // loading versions
 }
 
@@ -329,15 +346,23 @@ func (m model) renderPickerView() tea.View {
 	case pickerLoadingVersions:
 		content = fmt.Sprintf("Loading versions for %s...", m.selectedTool)
 	case pickerSelectVersion:
-		help := m.styles.help.Render("Enter to install • / to filter • Esc to go back • q to close")
+		help := m.styles.help.Render("Enter to select • / to filter • Esc to go back • q to close")
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			m.versionList.View(),
 			"",
 			help,
 		)
+	case pickerSelectConfig:
+		help := m.styles.help.Render("Enter to install • / to filter • Esc to go back • q to close")
+		content = lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.configList.View(),
+			"",
+			help,
+		)
 	case pickerInstalling:
-		content = fmt.Sprintf("Installing %s...", m.selectedTool)
+		content = fmt.Sprintf("Installing %s@%s...", m.selectedTool, m.selectedVersion)
 	}
 
 	v := tea.NewView(content)
