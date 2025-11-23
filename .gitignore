@@ -31,3 +31,6 @@ go.work.sum
 
 # AI Tools
 CLAUDE.md
+
+# Debugging
+debug.log
