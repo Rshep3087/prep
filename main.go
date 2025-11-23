@@ -57,57 +57,63 @@ type toolsLoadedMsg struct {
 	err   error
 }
 
-// loadMiseTasks is a Cmd that loads tasks asynchronously.
-func loadMiseTasks() tea.Msg {
-	cmd := exec.Command("mise", "tasks", "--json")
-	output, err := cmd.Output()
-	if err != nil {
-		return tasksLoadedMsg{err: fmt.Errorf("failed to execute mise tasks: %w", err)}
-	}
+// loadMiseTasks returns a Cmd that loads tasks asynchronously.
+func loadMiseTasks(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.CommandContext(ctx, "mise", "tasks", "--json")
+		output, err := cmd.Output()
+		if err != nil {
+			return tasksLoadedMsg{err: fmt.Errorf("failed to execute mise tasks: %w", err)}
+		}
 
-	var tasks []Task
-	if err := json.Unmarshal(output, &tasks); err != nil {
-		return tasksLoadedMsg{err: fmt.Errorf("failed to parse mise tasks JSON: %w", err)}
-	}
+		var tasks []Task
+		err = json.Unmarshal(output, &tasks)
+		if err != nil {
+			return tasksLoadedMsg{err: fmt.Errorf("failed to parse mise tasks JSON: %w", err)}
+		}
 
-	return tasksLoadedMsg{tasks: tasks}
+		return tasksLoadedMsg{tasks: tasks}
+	}
 }
 
-// loadMiseTools is a Cmd that loads tools asynchronously.
-func loadMiseTools() tea.Msg {
-	cmd := exec.Command("mise", "ls", "--json")
-	output, err := cmd.Output()
-	if err != nil {
-		return toolsLoadedMsg{err: fmt.Errorf("failed to execute mise ls: %w", err)}
-	}
+// loadMiseTools returns a Cmd that loads tools asynchronously.
+func loadMiseTools(ctx context.Context) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.CommandContext(ctx, "mise", "ls", "--json")
+		output, err := cmd.Output()
+		if err != nil {
+			return toolsLoadedMsg{err: fmt.Errorf("failed to execute mise ls: %w", err)}
+		}
 
-	// Parse the nested JSON structure: map[toolName][]miseToolEntry
-	var rawTools map[string][]miseToolEntry
-	if err := json.Unmarshal(output, &rawTools); err != nil {
-		return toolsLoadedMsg{err: fmt.Errorf("failed to parse mise ls JSON: %w", err)}
-	}
+		// Parse the nested JSON structure: map[toolName][]miseToolEntry
+		var rawTools map[string][]miseToolEntry
+		err = json.Unmarshal(output, &rawTools)
+		if err != nil {
+			return toolsLoadedMsg{err: fmt.Errorf("failed to parse mise ls JSON: %w", err)}
+		}
 
-	// Convert to flat list, only including active tools
-	var tools []Tool
-	for name, entries := range rawTools {
-		for _, entry := range entries {
-			if entry.Active {
-				source := ""
-				if entry.Source != nil {
-					source = entry.Source.Type
+		// Convert to flat list, only including active tools
+		var tools []Tool
+		for name, entries := range rawTools {
+			for _, entry := range entries {
+				if entry.Active {
+					source := ""
+					if entry.Source != nil {
+						source = entry.Source.Type
+					}
+					tools = append(tools, Tool{
+						Name:             name,
+						Version:          entry.Version,
+						RequestedVersion: entry.RequestedVersion,
+						Source:           source,
+						Active:           entry.Active,
+					})
 				}
-				tools = append(tools, Tool{
-					Name:             name,
-					Version:          entry.Version,
-					RequestedVersion: entry.RequestedVersion,
-					Source:           source,
-					Active:           entry.Active,
-				})
 			}
 		}
-	}
 
-	return toolsLoadedMsg{tools: tools}
+		return toolsLoadedMsg{tools: tools}
+	}
 }
 
 // focus constants.
@@ -128,7 +134,94 @@ type model struct {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(loadMiseTasks, loadMiseTools)
+	ctx := context.Background()
+	return tea.Batch(loadMiseTasks(ctx), loadMiseTools(ctx))
+}
+
+// handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
+func handleTasksLoaded(m model, msg tasksLoadedMsg) model {
+	const (
+		nameWidth        = 20
+		descriptionWidth = 60
+		tableWidth       = 82
+		headerOffset     = 2
+	)
+
+	if msg.err != nil {
+		log.Printf("error loading tasks: %v", msg.err)
+		m.err = msg.err
+		m.tasksLoading = false
+		return m
+	}
+
+	log.Printf("loaded %d tasks", len(msg.tasks))
+	m.tasks = msg.tasks
+	m.tasksLoading = false
+
+	columns := []table.Column{
+		{Title: "Name", Width: nameWidth},
+		{Title: "Description", Width: descriptionWidth},
+	}
+
+	rows := []table.Row{}
+	for _, task := range m.tasks {
+		rows = append(rows, table.Row{task.Name, task.Description})
+	}
+
+	s := tableStyles()
+	m.tasksTable = table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(m.focus == focusTasks),
+		table.WithStyles(s),
+		table.WithWidth(tableWidth),
+	)
+	m.tasksTable.SetHeight(len(rows) + headerOffset)
+	return m
+}
+
+// handleToolsLoaded processes the toolsLoadedMsg and initializes the tools table.
+func handleToolsLoaded(m model, msg toolsLoadedMsg) model {
+	const (
+		nameWidth      = 20
+		versionWidth   = 15
+		requestedWidth = 15
+		tableWidth     = 52
+		headerOffset   = 2
+	)
+
+	if msg.err != nil {
+		log.Printf("error loading tools: %v", msg.err)
+		m.err = msg.err
+		m.toolsLoading = false
+		return m
+	}
+
+	log.Printf("loaded %d tools", len(msg.tools))
+	m.tools = msg.tools
+	m.toolsLoading = false
+
+	columns := []table.Column{
+		{Title: "Name", Width: nameWidth},
+		{Title: "Version", Width: versionWidth},
+		{Title: "Requested", Width: requestedWidth},
+	}
+
+	rows := []table.Row{}
+	for _, tool := range m.tools {
+		rows = append(rows, table.Row{tool.Name, tool.Version, tool.RequestedVersion})
+	}
+
+	s := tableStyles()
+	m.toolsTable = table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithFocused(m.focus == focusTools),
+		table.WithStyles(s),
+		table.WithWidth(tableWidth),
+	)
+	m.toolsTable.SetHeight(len(rows) + headerOffset)
+	return m
 }
 
 // Update is called when a message is received. Use it to inspect messages
@@ -159,75 +252,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tasksLoadedMsg:
-		if msg.err != nil {
-			log.Printf("error loading tasks: %v", msg.err)
-			m.err = msg.err
-			m.tasksLoading = false
-			return m, nil
-		}
-
-		log.Printf("loaded %d tasks", len(msg.tasks))
-		m.tasks = msg.tasks
-		m.tasksLoading = false
-
-		// Initialize table with loaded tasks
-		columns := []table.Column{
-			{Title: "Name", Width: 20},
-			{Title: "Description", Width: 60},
-		}
-
-		rows := []table.Row{}
-		for _, task := range m.tasks {
-			rows = append(rows, table.Row{task.Name, task.Description})
-		}
-
-		s := tableStyles()
-		m.tasksTable = table.New(
-			table.WithColumns(columns),
-			table.WithRows(rows),
-			table.WithFocused(m.focus == focusTasks),
-			table.WithStyles(s),
-			table.WithWidth(82),
-		)
-		m.tasksTable.SetHeight(len(rows) + 2)
-
-		return m, nil
+		return handleTasksLoaded(m, msg), nil
 
 	case toolsLoadedMsg:
-		if msg.err != nil {
-			log.Printf("error loading tools: %v", msg.err)
-			m.err = msg.err
-			m.toolsLoading = false
-			return m, nil
-		}
-
-		log.Printf("loaded %d tools", len(msg.tools))
-		m.tools = msg.tools
-		m.toolsLoading = false
-
-		// Initialize table with loaded tools
-		columns := []table.Column{
-			{Title: "Name", Width: 20},
-			{Title: "Version", Width: 15},
-			{Title: "Requested", Width: 15},
-		}
-
-		rows := []table.Row{}
-		for _, tool := range m.tools {
-			rows = append(rows, table.Row{tool.Name, tool.Version, tool.RequestedVersion})
-		}
-
-		s := tableStyles()
-		m.toolsTable = table.New(
-			table.WithColumns(columns),
-			table.WithRows(rows),
-			table.WithFocused(m.focus == focusTools),
-			table.WithStyles(s),
-			table.WithWidth(52),
-		)
-		m.toolsTable.SetHeight(len(rows) + 2)
-
-		return m, nil
+		return handleToolsLoaded(m, msg), nil
 
 	case tea.WindowSizeMsg:
 		// Handle window resize if needed
