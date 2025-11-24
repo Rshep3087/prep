@@ -33,7 +33,7 @@ type Tool struct {
 	Name             string
 	Version          string
 	RequestedVersion string
-	Source           string
+	SourcePath       string // Full path to the config file defining this tool
 	Active           bool
 }
 
@@ -173,15 +173,15 @@ func LoadMiseTools(ctx context.Context, runner CommandRunner) tea.Cmd {
 			for name, entries := range rawTools {
 				for _, entry := range entries {
 					if entry.Active {
-						source := ""
+						sourcePath := ""
 						if entry.Source != nil {
-							source = entry.Source.Type
+							sourcePath = entry.Source.Path
 						}
 						tools = append(tools, Tool{
 							Name:             name,
 							Version:          entry.Version,
 							RequestedVersion: entry.RequestedVersion,
-							Source:           source,
+							SourcePath:       sourcePath,
 							Active:           entry.Active,
 						})
 					}

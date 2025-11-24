@@ -42,8 +42,11 @@ func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 
 	m.logger.Debug("loaded tasks", "count", len(msg.Tasks))
 
-	// Sort tasks by name for stable ordering
+	// Sort tasks by source first, then by name for grouped display
 	slices.SortFunc(msg.Tasks, func(a, b loader.Task) int {
+		if c := cmp.Compare(a.Source, b.Source); c != 0 {
+			return c
+		}
 		return cmp.Compare(a.Name, b.Name)
 	})
 
@@ -52,7 +55,7 @@ func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 
 	rows := make([]table.Row, 0, len(m.tasks))
 	for _, task := range m.tasks {
-		rows = append(rows, table.Row{task.Name, task.Description})
+		rows = append(rows, table.Row{task.Name, task.Description, formatSourcePath(task.Source)})
 	}
 
 	// Update rows on existing table instead of recreating
@@ -76,8 +79,11 @@ func (m model) handleToolsLoaded(msg loader.ToolsLoadedMsg) model {
 
 	m.logger.Debug("loaded tools", "count", len(msg.Tools))
 
-	// Sort tools by name for stable ordering
+	// Sort tools by source first, then by name for grouped display
 	slices.SortFunc(msg.Tools, func(a, b loader.Tool) int {
+		if c := cmp.Compare(a.SourcePath, b.SourcePath); c != 0 {
+			return c
+		}
 		return cmp.Compare(a.Name, b.Name)
 	})
 
@@ -86,7 +92,12 @@ func (m model) handleToolsLoaded(msg loader.ToolsLoadedMsg) model {
 
 	rows := make([]table.Row, 0, len(m.tools))
 	for _, tool := range m.tools {
-		rows = append(rows, table.Row{tool.Name, tool.Version, tool.RequestedVersion})
+		rows = append(rows, table.Row{
+			tool.Name,
+			tool.Version,
+			tool.RequestedVersion,
+			formatSourcePath(tool.SourcePath),
+		})
 	}
 
 	// Update rows on existing table instead of recreating

@@ -261,7 +261,7 @@ func TestLoadMiseTools(t *testing.T) {
 				Name:             "node",
 				Version:          "20.0.0",
 				RequestedVersion: "20",
-				Source:           "mise.toml",
+				SourcePath:       "/p",
 				Active:           true,
 			},
 		},
@@ -271,7 +271,13 @@ func TestLoadMiseTools(t *testing.T) {
 				"go": [{"version": "1.21.0", "requested_version": "1.21", "source": null, "active": true}]
 			}`,
 			wantTools: 1,
-			checkTool: &loader.Tool{Name: "go", Version: "1.21.0", RequestedVersion: "1.21", Source: "", Active: true},
+			checkTool: &loader.Tool{
+				Name:             "go",
+				Version:          "1.21.0",
+				RequestedVersion: "1.21",
+				SourcePath:       "",
+				Active:           true,
+			},
 		},
 		{
 			name:      "handles empty tools",
@@ -355,8 +361,8 @@ func assertToolMatch(t *testing.T, tools []loader.Tool, want *loader.Tool) {
 		if tool.RequestedVersion != want.RequestedVersion {
 			t.Errorf("requested_version = %q, want %q", tool.RequestedVersion, want.RequestedVersion)
 		}
-		if tool.Source != want.Source {
-			t.Errorf("source = %q, want %q", tool.Source, want.Source)
+		if tool.SourcePath != want.SourcePath {
+			t.Errorf("source = %q, want %q", tool.SourcePath, want.SourcePath)
 		}
 		return
 	}

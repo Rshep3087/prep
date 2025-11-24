@@ -1,9 +1,41 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
+
 	"charm.land/bubbles/v2/table"
 	"charm.land/lipgloss/v2"
 )
+
+// formatSourcePath formats a config file path for display.
+// It abbreviates the home directory to ~ and uses the current working directory
+// to show relative paths for project-local configs.
+func formatSourcePath(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	// Get home directory and current working directory
+	home, _ := os.UserHomeDir()
+	cwd, _ := os.Getwd()
+
+	// If path is under cwd, show relative path
+	if cwd != "" && strings.HasPrefix(path, cwd) {
+		rel, err := filepath.Rel(cwd, path)
+		if err == nil {
+			return rel
+		}
+	}
+
+	// Otherwise, abbreviate home directory to ~
+	if home != "" && strings.HasPrefix(path, home) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+
+	return path
+}
 
 // Focus constants.
 const (
@@ -16,10 +48,11 @@ const (
 // Column width constants.
 const (
 	colWidthName        = 20
-	colWidthDescription = 60
+	colWidthDescription = 40
 	colWidthVersion     = 15
 	colWidthValue       = 50
 	colWidthEnvName     = 30
+	colWidthSource      = 25
 )
 
 // Table width constants.
@@ -88,6 +121,7 @@ func getTasksTableConfig() tableConfig {
 		columns: []table.Column{
 			{Title: "Name", Width: colWidthName},
 			{Title: "Description", Width: colWidthDescription},
+			{Title: "Source", Width: colWidthSource},
 		},
 		width: tableWidthWide,
 	}
@@ -100,8 +134,9 @@ func getToolsTableConfig() tableConfig {
 			{Title: "Name", Width: colWidthName},
 			{Title: "Version", Width: colWidthVersion},
 			{Title: "Requested", Width: colWidthVersion},
+			{Title: "Source", Width: colWidthSource},
 		},
-		width: tableWidthNarrow,
+		width: tableWidthWide,
 	}
 }
 
@@ -240,26 +275,34 @@ func updateTableWidths(m model) model {
 	// Use available width (with some padding for borders)
 	availableWidth := m.windowWidth - tablePadding
 
-	// Tasks table: Name + Description columns
+	// Tasks table: Name + Description + Source columns
+	// Source column expands to fill remaining space
 	tasksNameWidth := colWidthName
-	tasksDescWidth := max(availableWidth-tasksNameWidth-columnPadding, colWidthDescription)
+	tasksDescWidth := colWidthDescription
+	tasksSourceWidth := max(
+		availableWidth-tasksNameWidth-tasksDescWidth-columnPadding*2,
+		colWidthSource,
+	)
 	m.tasksTable.SetColumns([]table.Column{
 		{Title: "Name", Width: tasksNameWidth},
 		{Title: "Description", Width: tasksDescWidth},
+		{Title: "Source", Width: tasksSourceWidth},
 	})
 	m.tasksTable.SetWidth(availableWidth)
 
-	// Tools table: Name + Version + Requested columns (expand last column for consistent divider)
+	// Tools table: Name + Version + Requested + Source columns
 	toolsNameWidth := colWidthName
 	toolsVersionWidth := colWidthVersion
-	toolsRequestedWidth := max(
-		availableWidth-toolsNameWidth-toolsVersionWidth-columnPadding-columnPadding,
-		colWidthVersion,
+	toolsRequestedWidth := colWidthVersion
+	toolsSourceWidth := max(
+		availableWidth-toolsNameWidth-toolsVersionWidth-toolsRequestedWidth-columnPadding*3,
+		colWidthSource,
 	)
 	m.toolsTable.SetColumns([]table.Column{
 		{Title: "Name", Width: toolsNameWidth},
 		{Title: "Version", Width: toolsVersionWidth},
 		{Title: "Requested", Width: toolsRequestedWidth},
+		{Title: "Source", Width: toolsSourceWidth},
 	})
 	m.toolsTable.SetWidth(availableWidth)
 
