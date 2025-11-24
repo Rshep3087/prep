@@ -212,6 +212,17 @@ func (m model) handleConfigFilesLoaded(msg loader.ConfigFilesLoadedMsg) model {
 	return m
 }
 
+// handleEditorClosed processes the editor closed message.
+func (m model) handleEditorClosed(msg editorClosedMsg) model {
+	if msg.err != nil {
+		m.logger.Error("editor closed with error", "error", msg.err)
+	} else {
+		m.logger.Debug("editor closed successfully")
+	}
+	// File watcher will detect changes and trigger reload automatically
+	return m
+}
+
 // handleFileChanged processes file change events with debouncing.
 func (m model) handleFileChanged(msg watcher.FileChangedMsg) (model, tea.Cmd) {
 	if time.Since(m.lastReload) < debounceInterval {
@@ -283,6 +294,9 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 		if m.focus == focusTools {
 			return m.unuseTool()
 		}
+	case "e":
+		// Edit source file (only when focused on tasks or tools table)
+		return m.editSourceFile()
 	}
 	// Key not handled - let tables process it
 	return m, nil, false
@@ -300,6 +314,33 @@ func (m model) unuseTool() (model, tea.Cmd, bool) {
 
 	ctx := context.Background()
 	return m, loader.RemoveTool(ctx, m.runner, tool, version), true
+}
+
+// editSourceFile opens the source file for the selected task or tool in the editor.
+func (m model) editSourceFile() (model, tea.Cmd, bool) {
+	source := m.getSelectedSourcePath()
+	if source == "" {
+		return m, nil, true
+	}
+	m.logger.Debug("opening editor for source", "source", source)
+	return m, m.openEditor(source), true
+}
+
+// getSelectedSourcePath returns the source file path for the currently selected row.
+func (m model) getSelectedSourcePath() string {
+	switch m.focus {
+	case focusTasks:
+		idx := m.tasksTable.Cursor()
+		if idx >= 0 && idx < len(m.tasks) {
+			return m.tasks[idx].Source
+		}
+	case focusTools:
+		idx := m.toolsTable.Cursor()
+		if idx >= 0 && idx < len(m.tools) {
+			return m.tools[idx].SourcePath
+		}
+	}
+	return ""
 }
 
 // handleOutputKeys handles key presses in the output view.
@@ -822,4 +863,14 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
 		m = updateTableLayout(m)
 	}
 	return m
+}
+
+// openEditor launches the configured editor to edit a file.
+// The TUI is suspended while the editor runs.
+func (m model) openEditor(filePath string) tea.Cmd {
+	//nolint:gosec // editor and filePath are controlled by the application
+	cmd := exec.CommandContext(context.Background(), m.editor, filePath)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorClosedMsg{err: err}
+	})
 }

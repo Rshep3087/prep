@@ -16,8 +16,18 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	debug := fs.Bool("debug", false, "enable debug logging to debug.log")
+	editorFlag := fs.String("editor", "", "editor command for editing source files (overrides $EDITOR)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
+	}
+
+	// Determine editor: flag takes precedence over env var, fallback to "vi"
+	editor := *editorFlag
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		editor = "vi"
 	}
 
 	// Setup logger
@@ -45,6 +55,7 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		runner:         execRunner{},
 		styles:         newStyles(),
 		logger:         logger,
+		editor:         editor,
 	}
 	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
 	m.sender = program // *tea.Program implements messageSender

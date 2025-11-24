@@ -54,6 +54,11 @@ type taskDoneMsg struct {
 	err error
 }
 
+// editorClosedMsg is sent when the external editor closes.
+type editorClosedMsg struct {
+	err error
+}
+
 // pickerState represents the state of the tool installation picker.
 type pickerState int
 
@@ -141,6 +146,7 @@ type model struct {
 	sender messageSender // for sending messages to the program
 	styles styles        // UI styles
 	logger *slog.Logger  // for logging
+	editor string        // editor command for editing source files
 
 	// File watching state
 	watcher     *fsnotify.Watcher // watches config files for changes
@@ -171,8 +177,6 @@ func (m model) Init() tea.Cmd {
 // Update is called when a message is received. Use it to inspect messages
 // and, in response, update the model and/or send a command.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
 	// When picker is open, route messages to the picker (lists need all msg types for filtering)
 	if m.pickerState != pickerClosed {
 		return m.handlePickerUpdate(msg)
@@ -227,12 +231,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watcher.FileChangedMsg:
 		return m.handleFileChanged(msg)
 
+	case editorClosedMsg:
+		return m.handleEditorClosed(msg), nil
+
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg), nil
 	}
 
+	return m.updateFocusedComponent(msg)
+}
+
+// updateFocusedComponent updates the currently focused table or viewport.
+func (m model) updateFocusedComponent(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	// Update viewport when showing output
+	if m.showOutput {
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
 	// Update the focused table with any other messages (only when not showing output or picker)
-	canUpdateTables := !m.showOutput && m.pickerState == pickerClosed &&
+	canUpdateTables := m.pickerState == pickerClosed &&
 		!m.tasksLoading && !m.toolsLoading && !m.envVarsLoading && m.err == nil
 	if canUpdateTables {
 		switch m.focus {
@@ -243,11 +263,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case focusEnvVars:
 			m.envVarsTable, cmd = m.envVarsTable.Update(msg)
 		}
-	}
-
-	// Update viewport when showing output
-	if m.showOutput {
-		m.viewport, cmd = m.viewport.Update(msg)
 	}
 
 	return m, cmd
@@ -296,11 +311,11 @@ func (m model) View() tea.View {
 	var help string
 	switch m.focus {
 	case focusTasks:
-		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • q to quit")
+		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • e edit source • q to quit")
 	case focusEnvVars:
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • v show • V show all • h hide all • q to quit")
 	case focusTools:
-		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • a add • u unuse • q to quit")
+		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • a add • u unuse • e edit source • q to quit")
 	default:
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • q to quit")
 	}
