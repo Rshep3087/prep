@@ -5,12 +5,8 @@ hooks {
         fix = true    // automatically modify files with available linter fixes
         stash = "git" // stashes unstaged changes while running fix steps
         steps {
-            ["fmt"] {
-                check = "mise run fmt"
-                exclusive = true
-            }
-            ["vet"] {
-                check = "mise run vet"
+            ["check"] {
+                check = "mise run check"
                 exclusive = true
             }
         }
