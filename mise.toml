@@ -2,6 +2,7 @@
 go = '1.25.4'
 golangci-lint = "2.6.2"
 goreleaser = "2.12.7"
+hk = "1.24.1"
 svu = "3.3.0"
 
 [env]
@@ -27,8 +28,8 @@ run = "go test ./..."
 description = "Run all tests"
 
 [tasks.fmt]
-run = "go fmt ./..."
-description = "Format all Go files"
+run = "golangci-lint fmt"
+description = "Format all Go files with gofumpt, goimports, and golines"
 
 [tasks.tidy]
 run = "go mod tidy"
