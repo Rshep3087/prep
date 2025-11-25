@@ -1,0 +1,35 @@
+amends "package://github.com/jdx/hk/releases/download/v1.24.1/hk@1.24.1#/Config.pkl"
+
+hooks {
+    ["pre-commit"] {
+        fix = true    // automatically modify files with available linter fixes
+        stash = "git" // stashes unstaged changes while running fix steps
+        steps {
+            ["fmt"] {
+                check = "mise run fmt"
+                exclusive = true
+            }
+            ["vet"] {
+                check = "mise run vet"
+                exclusive = true
+            }
+        }
+    }
+    ["pre-push"] {
+        steps {
+            ["check"] {
+                check = "mise run check"
+                exclusive = true
+            }
+        }
+    }
+    // "check" is a special step for `hk check` command
+    ["check"] {
+        steps {
+            ["mise-check"] {
+                check = "mise run check"
+                exclusive = true
+            }
+        }
+    }
+}
