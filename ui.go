@@ -81,6 +81,10 @@ const viewportHeaderFooterHeight = 4
 // pickerListPadding is the space reserved for header/footer in picker views.
 const pickerListPadding = 4
 
+// maxOutputLines is the maximum number of output lines to keep in memory.
+// When this limit is exceeded, older lines are dropped in a rolling buffer fashion.
+const maxOutputLines = 10000
+
 // tableConfig holds configuration for creating a table.
 type tableConfig struct {
 	columns []table.Column

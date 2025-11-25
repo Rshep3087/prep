@@ -175,7 +175,15 @@ func (m model) handleMiseVersion(msg loader.MiseVersionMsg) model {
 }
 
 // handleTaskOutput appends task output and updates the viewport.
+// Implements a rolling buffer: when output exceeds maxOutputLines.
 func (m model) handleTaskOutput(msg taskOutputMsg) model {
+	m.totalOutputLines++
+
+	// Implement rolling buffer: keep only the last maxOutputLines
+	if len(m.output) >= maxOutputLines {
+		m.output = m.output[len(m.output)-(maxOutputLines-1):]
+	}
+
 	m.output = append(m.output, msg.line)
 	m.viewport.SetContent(strings.Join(m.output, "\n"))
 	m.viewport.GotoBottom()
@@ -506,6 +514,7 @@ func (m model) startTask(taskName string) (model, tea.Cmd) {
 	m.taskRunning = true
 	m.taskErr = nil
 	m.output = []string{}
+	m.totalOutputLines = 0
 	m.cancelFunc = cancel
 
 	return m, runTask(ctx, taskName, m.sender)

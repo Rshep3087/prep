@@ -131,15 +131,16 @@ type model struct {
 	miseVersion string
 
 	// Task execution state
-	showOutput   bool               // whether to show the output viewport
-	runningTask  string             // name of the task being run
-	taskRunning  bool               // whether a task is currently running
-	taskErr      error              // error from task execution (if any)
-	output       []string           // output lines from the task
-	viewport     viewport.Model     // scrollable viewport for output
-	cancelFunc   context.CancelFunc // to cancel the running task
-	windowWidth  int
-	windowHeight int
+	showOutput       bool               // whether to show the output viewport
+	runningTask      string             // name of the task being run
+	taskRunning      bool               // whether a task is currently running
+	taskErr          error              // error from task execution (if any)
+	output           []string           // output lines from the task
+	totalOutputLines int                // total number of output lines received
+	viewport         viewport.Model     // scrollable viewport for output
+	cancelFunc       context.CancelFunc // to cancel the running task
+	windowWidth      int
+	windowHeight     int
 
 	// Dependencies (DIP)
 	runner commandRunner // for running commands
@@ -387,8 +388,13 @@ func (m model) renderPickerView() tea.View {
 
 // renderOutputView renders the task output viewport.
 func (m model) renderOutputView() tea.View {
-	// Header with task name and status
-	title := m.styles.title.Render(fmt.Sprintf("Task: %s", m.runningTask))
+	var title string
+	if m.totalOutputLines > maxOutputLines {
+		title = m.styles.title.Render(fmt.Sprintf("Task: %s (showing last %d of %d lines)",
+			m.runningTask, maxOutputLines, m.totalOutputLines))
+	} else {
+		title = m.styles.title.Render(fmt.Sprintf("Task: %s", m.runningTask))
+	}
 
 	var status string
 	switch {
