@@ -25,8 +25,9 @@ const debounceInterval = 500 * time.Millisecond
 
 // Key constants for common key bindings.
 const (
-	keyEsc   = "esc"
-	keyEnter = "enter"
+	keyEsc      = "esc"
+	keyEnter    = "enter"
+	keyAltEnter = "alt+enter"
 )
 
 // minToolRowFields is the minimum number of fields expected in a tool table row (name, version).
@@ -321,12 +322,12 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 	case keyEnter:
 		// Only run tasks when focused on tasks table
 		if m.focus == focusTasks && len(m.tasks) > 0 {
-			selectedRow := m.tasksTable.SelectedRow()
-			if selectedRow != nil {
-				taskName := selectedRow[0]
-				newModel, cmd := m.startTask(taskName)
-				return newModel, cmd, true
-			}
+			return m.handleTaskEnter()
+		}
+		return m, nil, true
+	case keyAltEnter:
+		if m.focus == focusTasks && len(m.tasks) > 0 {
+			return m.handleTaskAltEnter()
 		}
 		return m, nil, true
 	case "tab":
@@ -378,6 +379,68 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 	}
 	// Key not handled - let tables process it
 	return m, nil, false
+}
+
+func (m model) handleTaskEnter() (model, tea.Cmd, bool) {
+	selectedRow := m.tasksTable.SelectedRow()
+	if selectedRow != nil {
+		taskName := selectedRow[0]
+		newModel, cmd := m.startTask(taskName)
+		return newModel, cmd, true
+	}
+
+	return model{}, nil, false
+}
+
+func (m model) handleTaskAltEnter() (model, tea.Cmd, bool) {
+	selectedRow := m.tasksTable.SelectedRow()
+	if selectedRow != nil {
+		taskName := selectedRow[0]
+		m.argInputActive = true
+		m.argInputTask = taskName
+		m.argInput.Focus()
+		m.argInput.SetValue("")
+		return m, nil, true
+	}
+
+	return model{}, nil, false
+}
+
+// handleArgInput handles input when argument input mode is active.
+func (m model) handleArgInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		switch keyMsg.String() {
+		case keyEsc:
+			// Cancel argument input
+			m.argInputActive = false
+			m.argInputTask = ""
+			m.argInput.SetValue("")
+			return m, nil
+		case keyEnter:
+			// Run task with arguments
+			args := m.argInput.Value()
+			taskName := m.argInputTask
+
+			// Deactivate argument input
+			m.argInputActive = false
+			m.argInputTask = ""
+			m.argInput.SetValue("")
+
+			// Parse arguments (split by spaces, respecting quotes)
+			var argSlice []string
+			if args != "" {
+				argSlice = strings.Fields(args)
+			}
+
+			// Start task with arguments
+			return m.startTask(taskName, argSlice...)
+		}
+	}
+
+	// Pass message to text input for normal editing
+	var cmd tea.Cmd
+	m.argInput, cmd = m.argInput.Update(msg)
+	return m, cmd
 }
 
 func (m model) unuseTool() (model, tea.Cmd, bool) {
@@ -517,9 +580,16 @@ func refreshEnvVarsTable(m model) model {
 }
 
 // runTask executes a mise task and streams output back to the TUI.
-func runTask(ctx context.Context, taskName string, sender messageSender) tea.Cmd {
+func runTask(ctx context.Context, taskName string, sender messageSender, args ...string) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "mise", "run", taskName)
+		cmdArgs := []string{"mise", "run", taskName}
+		// If there are arguments, add -- separator so mise passes them to the task
+		if len(args) > 0 {
+			cmdArgs = append(cmdArgs, "--")
+			cmdArgs = append(cmdArgs, args...)
+		}
+		//nolint:gosec // cmdArgs are controlled: mise command is hardcoded, taskName from config, args from user
+		cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
 
 		// Create pipes for stdout and stderr
 		stdout, err := cmd.StdoutPipe()
@@ -558,8 +628,8 @@ func runTask(ctx context.Context, taskName string, sender messageSender) tea.Cmd
 }
 
 // startTask initializes and starts a task execution.
-func (m model) startTask(taskName string) (model, tea.Cmd) {
-	m.logger.Debug("starting task", "task", taskName)
+func (m model) startTask(taskName string, args ...string) (model, tea.Cmd) {
+	m.logger.Debug("starting task", "task", taskName, "args", args)
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -587,7 +657,7 @@ func (m model) startTask(taskName string) (model, tea.Cmd) {
 	m.totalOutputLines = 0
 	m.cancelFunc = cancel
 
-	return m, runTask(ctx, taskName, m.sender)
+	return m, runTask(ctx, taskName, m.sender, args...)
 }
 
 // openToolPicker opens the tool picker and starts loading the registry.

@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -142,6 +143,11 @@ type model struct {
 	windowWidth      int
 	windowHeight     int
 
+	// Task arguments state
+	argInputActive bool            // whether argument input mode is active
+	argInput       textinput.Model // text input for task arguments
+	argInputTask   string          // task name that arguments are for
+
 	// Dependencies (DIP)
 	runner commandRunner // for running commands
 	sender messageSender // for sending messages to the program
@@ -187,8 +193,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePickerUpdate(msg)
 	}
 
+	// When argument input is active, route messages to argument input handler
+	if m.argInputActive {
+		return m.handleArgInput(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		m.logger.Debug("handling key pess", "key", msg)
 		// Handle keys differently based on whether we're showing output
 		if m.showOutput {
 			return m.handleOutputKeys(msg)
@@ -293,6 +305,11 @@ func (m model) View() tea.View {
 		return m.renderPickerView()
 	}
 
+	// Show argument input view if active
+	if m.argInputActive {
+		return m.renderArgInputView()
+	}
+
 	// Show output view if running or viewing task output
 	if m.showOutput {
 		return m.renderOutputView()
@@ -316,7 +333,9 @@ func (m model) View() tea.View {
 	var help string
 	switch m.focus {
 	case focusTasks:
-		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • Enter to run task • e edit source • q to quit")
+		help = m.styles.help.Render(
+			"Tab to switch • ↑/↓ to navigate • Enter to run • Alt+Enter for args • e edit source • q to quit",
+		)
 	case focusEnvVars:
 		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • v show • V show all • h hide all • q to quit")
 	case focusTools:

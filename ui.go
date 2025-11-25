@@ -1,11 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/table"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -37,32 +39,30 @@ func formatSourcePath(path string) string {
 	return path
 }
 
-// Focus constants.
 const (
+	// Focus constants.
 	focusTasks = iota
 	focusTools
 	focusEnvVars
 	focusSectionCount // total number of focus sections for cycling
 )
 
-// Column width constants.
 const (
+	// Column width constants.
 	colWidthName        = 20
 	colWidthDescription = 40
 	colWidthVersion     = 15
 	colWidthValue       = 50
 	colWidthEnvName     = 30
 	colWidthSource      = 25
-)
 
-// Table width constants.
-const (
-	tableWidthWide   = 82
-	tableWidthNarrow = 52
-)
+	// Table width constants.
+	tableWidthWide = 82
 
-// Table layout constants for resize calculations.
-const (
+	// Input width constants.
+	defaultInputWidth = 80 // default width for text input fields
+
+	// Table layout constants for resize calculations.
 	tablePadding  = 4 // padding for table borders
 	columnPadding = 5 // padding between columns
 
@@ -73,17 +73,17 @@ const (
 	sectionSpacerLines = 1 // blank line between sections
 	helpLines          = 2 // help text + blank line before it
 	numTables          = 3 // tasks, tools, env vars
+
+	// viewportHeaderFooterHeight is the space reserved for header and footer in output view.
+	viewportHeaderFooterHeight = 4
+
+	// pickerListPadding is the space reserved for header/footer in picker views.
+	pickerListPadding = 4
+
+	// maxOutputLines is the maximum number of output lines to keep in memory.
+	// When this limit is exceeded, older lines are dropped in a rolling buffer fashion.
+	maxOutputLines = 10000
 )
-
-// viewportHeaderFooterHeight is the space reserved for header and footer in output view.
-const viewportHeaderFooterHeight = 4
-
-// pickerListPadding is the space reserved for header/footer in picker views.
-const pickerListPadding = 4
-
-// maxOutputLines is the maximum number of output lines to keep in memory.
-// When this limit is exceeded, older lines are dropped in a rolling buffer fashion.
-const maxOutputLines = 10000
 
 // tableConfig holds configuration for creating a table.
 type tableConfig struct {
@@ -268,6 +268,27 @@ func updateTableLayout(m model) model {
 	m.envVarsTable.UpdateViewport()
 
 	return updateTableWidths(m)
+}
+
+// renderArgInputView renders the argument input view.
+func (m model) renderArgInputView() tea.View {
+	title := m.styles.title.Render(fmt.Sprintf("Run task: %s", m.argInputTask))
+	prompt := m.styles.help.Render("Enter arguments for the task:")
+	help := m.styles.help.Render("Enter to run • Esc to cancel")
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		title,
+		"",
+		prompt,
+		m.argInput.View(),
+		"",
+		help,
+	)
+
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 // updateTableWidths adjusts table widths based on the current terminal width.

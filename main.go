@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -55,6 +56,12 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		return fmt.Errorf("get user home directory: %w", homeDirErr)
 	}
 
+	// Initialize argument input textinput
+	ti := textinput.New()
+	ti.Placeholder = "Enter arguments..."
+	ti.CharLimit = 500
+	ti.SetWidth(defaultInputWidth)
+
 	m := &model{
 		tasksTable:     newTable(getTasksTableConfig(), nil, true),
 		toolsTable:     newTable(getToolsTableConfig(), nil, false),
@@ -62,6 +69,7 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		tasksLoading:   true,
 		toolsLoading:   true,
 		envVarsLoading: true,
+		argInput:       ti,
 		runner:         execRunner{},
 		styles:         newStyles(),
 		logger:         logger,
