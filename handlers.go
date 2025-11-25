@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/google/shlex"
 
 	"github.com/rshep3087/prep/internal/loader"
 	"github.com/rshep3087/prep/internal/watcher"
@@ -1017,8 +1018,22 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
 // openEditor launches the configured editor to edit a file.
 // The TUI is suspended while the editor runs.
 func (m model) openEditor(filePath string) tea.Cmd {
-	//nolint:gosec // editor and filePath are controlled by the application
-	cmd := exec.CommandContext(context.Background(), m.editor, filePath)
+	parts, err := shlex.Split(m.editor)
+	if err != nil || len(parts) == 0 {
+		m.logger.Error("failed to parse editor command", "editor", m.editor, "error", err)
+		return func() tea.Msg {
+			return editorClosedMsg{err: fmt.Errorf("invalid editor command: %w", err)}
+		}
+	}
+
+	executable := parts[0]
+	var args []string
+	args = append(args, parts[1:]...)
+	args = append(args, filePath)
+
+	m.logger.Debug("launching editor", "executable", executable, "args", args)
+
+	cmd := exec.CommandContext(context.Background(), executable, args...)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return editorClosedMsg{err: err}
 	})
