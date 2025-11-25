@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -31,6 +32,71 @@ const (
 // minToolRowFields is the minimum number of fields expected in a tool table row (name, version).
 const minToolRowFields = 2
 
+// Source priority constants for sorting.
+// Lower values = higher priority (closer to current directory).
+const (
+	priorityParentDirBase = 1000   // Base priority for parent directories
+	priorityHomeDir       = 10000  // Priority for home directory configs
+	prioritySystemDir     = 100000 // Priority for system configs (/etc/mise)
+	priorityUnknown       = 999999 // Priority for unresolvable paths
+)
+
+// sourcePriority returns the priority of a source path for sorting.
+// Following mise's configuration hierarchy: configs closer to cwd have HIGHER priority (lower number).
+// Priority is based on directory depth relative to cwd:
+// - Configs in cwd or subdirectories: negative depth (closer = higher priority).
+// - System/home configs: large positive number (lower priority).
+func (m model) sourcePriority(sourcePath string) int {
+	// Normalize the source path to absolute
+	absPath := sourcePath
+	if !filepath.IsAbs(sourcePath) {
+		var err error
+		absPath, err = filepath.Abs(sourcePath)
+		if err != nil {
+			return priorityUnknown // If we can't resolve, lowest priority
+		}
+	}
+
+	// Get the directory containing the config file
+	configDir := filepath.Dir(absPath)
+
+	// Check if this config is in cwd or a subdirectory of cwd
+	relPath, err := filepath.Rel(m.cwd, configDir)
+	if err == nil && !strings.HasPrefix(relPath, "..") {
+		// Config is in cwd or subdirectory
+		// Count directory depth: fewer levels = higher priority (lower number)
+		// cwd itself = 0, cwd/subdir = 1, cwd/subdir/subdir = 2, etc.
+		if relPath == "." {
+			return 0 // Config in cwd has highest priority
+		}
+		depth := strings.Count(relPath, string(filepath.Separator)) + 1
+		return depth
+	}
+
+	// Check if this is a parent directory of cwd (mise walks up the tree)
+	relPath, err = filepath.Rel(configDir, m.cwd)
+	if err == nil && !strings.HasPrefix(relPath, "..") {
+		// Config is in a parent directory of cwd
+		// More levels up = lower priority (higher number)
+		levelsUp := strings.Count(relPath, string(filepath.Separator)) + 1
+		return priorityParentDirBase + levelsUp
+	}
+
+	// Check home directory configs (lower priority than project configs)
+	// Only for configs that are NOT in the project tree
+	if strings.HasPrefix(absPath, m.homeDir) {
+		return priorityHomeDir
+	}
+
+	// Check system configs (lowest priority)
+	if strings.HasPrefix(absPath, "/etc/mise") {
+		return prioritySystemDir
+	}
+
+	// Everything else
+	return priorityUnknown
+}
+
 // handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
 func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 	if msg.Err != nil {
@@ -42,9 +108,11 @@ func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 
 	m.logger.Debug("loaded tasks", "count", len(msg.Tasks))
 
-	// Sort tasks by source first, then by name for grouped display
+	// Sort tasks by source priority (closer to cwd = higher priority), then by name
 	slices.SortFunc(msg.Tasks, func(a, b loader.Task) int {
-		if c := cmp.Compare(a.Source, b.Source); c != 0 {
+		priorityA := m.sourcePriority(a.Source)
+		priorityB := m.sourcePriority(b.Source)
+		if c := cmp.Compare(priorityA, priorityB); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Name, b.Name)
@@ -79,9 +147,11 @@ func (m model) handleToolsLoaded(msg loader.ToolsLoadedMsg) model {
 
 	m.logger.Debug("loaded tools", "count", len(msg.Tools))
 
-	// Sort tools by source first, then by name for grouped display
+	// Sort tools by source priority (closer to cwd = higher priority), then by name
 	slices.SortFunc(msg.Tools, func(a, b loader.Tool) int {
-		if c := cmp.Compare(a.SourcePath, b.SourcePath); c != 0 {
+		priorityA := m.sourcePriority(a.SourcePath)
+		priorityB := m.sourcePriority(b.SourcePath)
+		if c := cmp.Compare(priorityA, priorityB); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Name, b.Name)

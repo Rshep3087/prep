@@ -1,12 +1,140 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"charm.land/bubbles/v2/table"
 
 	"github.com/rshep3087/prep/internal/loader"
 )
+
+func TestSourcePriority(t *testing.T) {
+	// Create a test model with known cwd and homeDir
+	m := model{
+		cwd:     "/home/user/work/myproject",
+		homeDir: "/home/user",
+	}
+
+	tests := []struct {
+		name       string
+		sourcePath string
+		want       int
+	}{
+		{
+			name:       "mise.toml in current directory has highest priority",
+			sourcePath: "/home/user/work/myproject/mise.toml",
+			want:       0,
+		},
+		{
+			name:       "config in subdirectory has lower priority",
+			sourcePath: "/home/user/work/myproject/backend/mise.toml",
+			want:       1,
+		},
+		{
+			name:       "config in nested subdirectory",
+			sourcePath: "/home/user/work/myproject/backend/api/mise.toml",
+			want:       2,
+		},
+		{
+			name:       "config in parent directory",
+			sourcePath: "/home/user/work/mise.toml",
+			want:       priorityParentDirBase + 1,
+		},
+		{
+			name:       "config two levels up",
+			sourcePath: "/home/user/mise.toml",
+			want:       priorityParentDirBase + 2,
+		},
+		{
+			name:       "home directory config",
+			sourcePath: "/home/user/.config/mise/config.toml",
+			want:       priorityHomeDir,
+		},
+		{
+			name:       "home directory tool-versions (parent of project, 2 levels up)",
+			sourcePath: "/home/user/.tool-versions",
+			want:       priorityParentDirBase + 2, // This is in a parent dir of the project
+		},
+		{
+			name:       "system config",
+			sourcePath: "/etc/mise/config.toml",
+			want:       prioritySystemDir,
+		},
+		{
+			name:       "system conf.d fragment",
+			sourcePath: "/etc/mise/conf.d/defaults.toml",
+			want:       prioritySystemDir,
+		},
+		{
+			name:       "unrelated directory",
+			sourcePath: "/opt/other/mise.toml",
+			want:       priorityUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := m.sourcePriority(tt.sourcePath)
+			if got != tt.want {
+				t.Errorf("sourcePriority(%q) = %d, want %d", tt.sourcePath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSourcePrioritySorting(t *testing.T) {
+	// Test that configs are sorted in the correct order
+	m := model{
+		cwd:     "/home/user/work/myproject",
+		homeDir: "/home/user",
+	}
+
+	expectedOrder := []string{
+		"/home/user/work/myproject/mise.toml",         // 0 - cwd
+		"/home/user/work/myproject/backend/mise.toml", // 1 - subdir
+		"/home/user/work/mise.toml",                   // 1001 - parent
+		"/home/user/.config/mise/config.toml",         // 10000 - home
+		"/etc/mise/config.toml",                       // 100000 - system
+		"/opt/random/mise.toml",                       // 999999 - unknown
+	}
+
+	// Get priorities and verify ordering
+	for i := range len(expectedOrder) - 1 {
+		current := m.sourcePriority(expectedOrder[i])
+		next := m.sourcePriority(expectedOrder[i+1])
+		if current >= next {
+			t.Errorf(
+				"incorrect ordering: %q (priority=%d) should have lower priority than %q (priority=%d)",
+				expectedOrder[i], current, expectedOrder[i+1], next,
+			)
+		}
+	}
+}
+
+func TestSourcePriorityWithAbsolutePaths(t *testing.T) {
+	// Test with absolute paths
+	cwd, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatalf("failed to get absolute cwd: %v", err)
+	}
+
+	m := model{
+		cwd:     cwd,
+		homeDir: "/home/testuser",
+	}
+
+	// Test that a mise.toml in the actual cwd gets priority 0
+	cwdConfig := filepath.Join(cwd, "mise.toml")
+	priority := m.sourcePriority(cwdConfig)
+	if priority != 0 {
+		t.Errorf(
+			"sourcePriority(%q) = %d, want 0 (current directory should have highest priority)",
+			cwdConfig,
+			priority,
+		)
+	}
+}
 
 func TestMaskValue(t *testing.T) {
 	tests := []struct {
