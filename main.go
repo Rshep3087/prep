@@ -45,6 +45,16 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
+	// Get current working directory and home directory for source priority sorting
+	cwd, cwdErr := os.Getwd()
+	if cwdErr != nil {
+		return fmt.Errorf("get current working directory: %w", cwdErr)
+	}
+	homeDir, homeDirErr := os.UserHomeDir()
+	if homeDirErr != nil {
+		return fmt.Errorf("get user home directory: %w", homeDirErr)
+	}
+
 	m := &model{
 		tasksTable:     newTable(getTasksTableConfig(), nil, true),
 		toolsTable:     newTable(getToolsTableConfig(), nil, false),
@@ -56,6 +66,8 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		styles:         newStyles(),
 		logger:         logger,
 		editor:         editor,
+		cwd:            cwd,
+		homeDir:        homeDir,
 	}
 	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
 	m.sender = program // *tea.Program implements messageSender

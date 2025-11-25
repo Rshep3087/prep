@@ -162,6 +162,10 @@ type model struct {
 	selectedTool    string      // tool selected in first step
 	selectedVersion string      // version selected in second step
 	versionsLoading bool        // loading versions
+
+	// Cached directory paths for source priority sorting
+	cwd     string
+	homeDir string
 }
 
 func (m model) Init() tea.Cmd {
