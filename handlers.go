@@ -257,7 +257,7 @@ func (m model) handleTaskOutput(msg taskOutputMsg) model {
 	}
 
 	m.output = append(m.output, msg.line)
-	m.viewport.SetContent(strings.Join(m.output, "\n"))
+	m.viewport.SetContentLines(m.output)
 	m.viewport.GotoBottom()
 	return m
 }
@@ -650,6 +650,9 @@ func (m model) startTask(taskName string, args ...string) (model, tea.Cmd) {
 		viewport.WithHeight(height-viewportHeaderFooterHeight),
 	)
 
+	// Enable high performance rendering for alternate screen buffer
+	m.viewport.YPosition = 0
+
 	m.showOutput = true
 	m.runningTask = taskName
 	m.taskRunning = true
@@ -1003,11 +1006,13 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
 		// No list to resize
 	}
 	if m.showOutput {
-		m.viewport = viewport.New(
-			viewport.WithWidth(msg.Width),
-			viewport.WithHeight(msg.Height-viewportHeaderFooterHeight),
-		)
-		m.viewport.SetContent(strings.Join(m.output, "\n"))
+		// Update viewport dimensions (reuse instance instead of recreating)
+		m.viewport.SetWidth(msg.Width)
+		m.viewport.SetHeight(msg.Height - viewportHeaderFooterHeight)
+
+		// Content already set via SetContentLines, just update viewport and scroll to bottom
+		m.viewport.SetContentLines(m.output)
+		m.viewport.GotoBottom()
 	} else {
 		// Update table layout based on terminal size
 		m = updateTableLayout(m)
