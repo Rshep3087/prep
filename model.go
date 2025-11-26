@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
@@ -135,6 +136,7 @@ type model struct {
 	showOutput       bool               // whether to show the output viewport
 	runningTask      string             // name of the task being run
 	taskRunning      bool               // whether a task is currently running
+	taskSpinner      spinner.Model      // animated spinner for running tasks
 	taskErr          error              // error from task execution (if any)
 	output           []string           // output lines from the task
 	totalOutputLines int                // total number of output lines received
@@ -199,6 +201,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if m.taskRunning {
+			var cmd tea.Cmd
+			m.taskSpinner, cmd = m.taskSpinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		m.logger.Debug("handling key pess", "key", msg)
 		// Handle keys differently based on whether we're showing output
@@ -422,7 +432,7 @@ func (m model) renderOutputView() tea.View {
 	var status string
 	switch {
 	case m.taskRunning:
-		status = m.styles.dimTitle.Render("● Running...")
+		status = m.styles.dimTitle.Render(m.taskSpinner.View() + " Running...")
 	case m.taskErr != nil:
 		status = m.styles.err.Render(fmt.Sprintf("✗ Failed: %v", m.taskErr))
 	default:

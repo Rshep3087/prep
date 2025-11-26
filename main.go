@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
@@ -70,6 +71,7 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		toolsLoading:   true,
 		envVarsLoading: true,
 		argInput:       ti,
+		taskSpinner:    spinner.New(),
 		runner:         execRunner{},
 		styles:         newStyles(),
 		logger:         logger,

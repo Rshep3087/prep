@@ -661,7 +661,10 @@ func (m model) startTask(taskName string, args ...string) (model, tea.Cmd) {
 	m.totalOutputLines = 0
 	m.cancelFunc = cancel
 
-	return m, runTask(ctx, taskName, m.sender, args...)
+	return m, tea.Batch(
+		runTask(ctx, taskName, m.sender, args...),
+		m.taskSpinner.Tick,
+	)
 }
 
 // openToolPicker opens the tool picker and starts loading the registry.
