@@ -385,30 +385,21 @@ func (m model) renderPickerView() tea.View {
 		// Should not reach here, but handle for completeness
 		content = ""
 	case pickerSelectTool:
-		help := m.styles.help.Render("Enter to select • / to filter • Esc/q to close")
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			m.toolList.View(),
-			"",
-			help,
 		)
 	case pickerLoadingVersions:
 		content = fmt.Sprintf("Loading versions for %s...", m.selectedTool)
 	case pickerSelectVersion:
-		help := m.styles.help.Render("Enter to select • / to filter • Esc to go back • q to close")
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			m.versionList.View(),
-			"",
-			help,
 		)
 	case pickerSelectConfig:
-		help := m.styles.help.Render("Enter to install • / to filter • Esc to go back • q to close")
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,
 			m.configList.View(),
-			"",
-			help,
 		)
 	case pickerInstalling:
 		content = fmt.Sprintf("Installing %s@%s...", m.selectedTool, m.selectedVersion)
