@@ -159,6 +159,7 @@ type outputKeyMap struct {
 	Cancel key.Binding
 	Scroll key.Binding
 	Close  key.Binding
+	Wrap   key.Binding
 }
 
 // newOutputKeyMap creates a new outputKeyMap.
@@ -174,6 +175,10 @@ func newOutputKeyMap(running bool) outputKeyMap {
 				key.WithKeys("up", "down", "j", "k"),
 				key.WithHelp("↑/↓/j/k", "scroll"),
 			),
+			Wrap: key.NewBinding(
+				key.WithKeys("w"),
+				key.WithHelp("w", "wrap"),
+			),
 		}
 	}
 	return outputKeyMap{
@@ -185,6 +190,10 @@ func newOutputKeyMap(running bool) outputKeyMap {
 			key.WithKeys("up", "down", "j", "k"),
 			key.WithHelp("↑/↓/j/k", "scroll"),
 		),
+		Wrap: key.NewBinding(
+			key.WithKeys("w"),
+			key.WithHelp("w", "wrap"),
+		),
 		Cancel: key.NewBinding(
 			key.WithKeys("ctrl+c"),
 			key.WithHelp("Ctrl+C", "quit"),
@@ -195,9 +204,9 @@ func newOutputKeyMap(running bool) outputKeyMap {
 // ShortHelp returns keybindings to be shown in the mini help view.
 func (k outputKeyMap) ShortHelp() []key.Binding {
 	if k.Close.Enabled() {
-		return []key.Binding{k.Close, k.Scroll, k.Cancel}
+		return []key.Binding{k.Close, k.Scroll, k.Wrap, k.Cancel}
 	}
-	return []key.Binding{k.Cancel, k.Scroll}
+	return []key.Binding{k.Cancel, k.Scroll, k.Wrap}
 }
 
 // FullHelp returns keybindings for the expanded help view.

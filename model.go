@@ -142,6 +142,7 @@ type model struct {
 	output           []string           // output lines from the task
 	totalOutputLines int                // total number of output lines received
 	viewport         viewport.Model     // scrollable viewport for output
+	wrapOutput       bool               // whether word wrapping is enabled for output
 	cancelFunc       context.CancelFunc // to cancel the running task
 	windowWidth      int
 	windowHeight     int
