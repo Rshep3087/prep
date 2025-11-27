@@ -9,10 +9,21 @@ import (
 	"log/slog"
 	"os"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
+
+const defaultHelpWidth = 80
+
+// initHelpModel creates a new help model with default dark styles and width.
+func initHelpModel() help.Model {
+	h := help.New()
+	h.Styles = help.DefaultDarkStyles()
+	h.SetWidth(defaultHelpWidth)
+	return h
+}
 
 func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -78,6 +89,16 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		editor:         editor,
 		cwd:            cwd,
 		homeDir:        homeDir,
+		tasksHelp:      initHelpModel(),
+		envVarsHelp:    initHelpModel(),
+		toolsHelp:      initHelpModel(),
+		outputHelp:     initHelpModel(),
+		argInputHelp:   initHelpModel(),
+		tasksKeys:      newTasksKeyMap(),
+		envVarsKeys:    newEnvVarsKeyMap(),
+		toolsKeys:      newToolsKeyMap(),
+		outputKeys:     newOutputKeyMap(false),
+		argInputKeys:   newArgInputKeyMap(),
 	}
 	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
 	m.sender = program // *tea.Program implements messageSender

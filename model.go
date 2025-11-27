@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"time"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/table"
@@ -174,6 +175,20 @@ type model struct {
 	// Cached directory paths for source priority sorting
 	cwd     string
 	homeDir string
+
+	// Help bubbles for each context
+	tasksHelp    help.Model
+	envVarsHelp  help.Model
+	toolsHelp    help.Model
+	outputHelp   help.Model
+	argInputHelp help.Model
+
+	// Key maps
+	tasksKeys    tasksKeyMap
+	envVarsKeys  envVarsKeyMap
+	toolsKeys    toolsKeyMap
+	outputKeys   outputKeyMap
+	argInputKeys argInputKeyMap
 }
 
 func (m model) Init() tea.Cmd {
@@ -339,19 +354,15 @@ func (m model) View() tea.View {
 	toolsTitle := m.styles.renderTitle("Tools", m.focus == focusTools)
 	envVarsTitle := m.styles.renderTitle("Environment Variables", m.focus == focusEnvVars)
 
-	// Contextual help text based on focus
-	var help string
+	// Get contextual help based on focus
+	var helpView string
 	switch m.focus {
 	case focusTasks:
-		help = m.styles.help.Render(
-			"Tab to switch • ↑/↓ to navigate • Enter to run • Alt+Enter for args • e edit source • q to quit",
-		)
-	case focusEnvVars:
-		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • v show • V show all • h hide all • q to quit")
+		helpView = m.tasksHelp.View(m.tasksKeys)
 	case focusTools:
-		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • a add • u unuse • e edit source • q to quit")
-	default:
-		help = m.styles.help.Render("Tab to switch • ↑/↓ to navigate • q to quit")
+		helpView = m.toolsHelp.View(m.toolsKeys)
+	case focusEnvVars:
+		helpView = m.envVarsHelp.View(m.envVarsKeys)
 	}
 
 	// Build the view using JoinVertical
@@ -368,7 +379,7 @@ func (m model) View() tea.View {
 		envVarsTitle,
 		m.envVarsTable.View(),
 		"",
-		help,
+		helpView,
 	)
 
 	v := tea.NewView(content)
@@ -432,13 +443,9 @@ func (m model) renderOutputView() tea.View {
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top, title, "  ", status)
 
-	// Help text
-	var help string
-	if m.taskRunning {
-		help = m.styles.help.Render("Ctrl+C to cancel • ↑/↓ to scroll")
-	} else {
-		help = m.styles.help.Render("Esc/q to close • ↑/↓ to scroll • Ctrl+C to quit")
-	}
+	// Update output keys based on running state and render help
+	m.outputKeys = newOutputKeyMap(m.taskRunning)
+	helpView := m.outputHelp.View(m.outputKeys)
 
 	// Build the view
 	content := lipgloss.JoinVertical(
@@ -447,7 +454,7 @@ func (m model) renderOutputView() tea.View {
 		"",
 		m.viewport.View(),
 		"",
-		help,
+		helpView,
 	)
 
 	v := tea.NewView(content)
