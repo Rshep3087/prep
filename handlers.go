@@ -132,7 +132,7 @@ func filterTasks(tasks []loader.Task, filter string) []loader.Task {
 }
 
 // applyTaskFilter applies filter and updates table rows.
-func (m model) applyTaskFilter() model {
+func (m model) applyTaskFilter(resetCursor bool) model {
 	filterValue := m.filterInput.Value()
 	if filterValue == "" {
 		m.filteredTasks = m.tasks
@@ -146,7 +146,7 @@ func (m model) applyTaskFilter() model {
 	}
 	m.tasksTable.SetRows(rows)
 
-	if len(rows) > 0 {
+	if resetCursor && len(rows) > 0 {
 		m.tasksTable.SetCursor(0)
 	}
 	return m
@@ -189,9 +189,9 @@ func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 		m = updateTableLayout(m)
 	}
 
-	// Re-apply filter if active
+	// Re-apply filter if active (preserve cursor position during reload)
 	if m.filterActive {
-		m = m.applyTaskFilter()
+		m = m.applyTaskFilter(false)
 	}
 
 	return m
@@ -600,7 +600,7 @@ func (m model) handleFilterInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update filter input and apply filter in real-time
 		var cmd tea.Cmd
 		m.filterInput, cmd = m.filterInput.Update(msg)
-		m = m.applyTaskFilter()
+		m = m.applyTaskFilter(false)
 		return m, cmd
 	}
 
@@ -644,9 +644,10 @@ func (m model) handleFilterInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update filter input and apply filter in real-time
+	// Reset cursor to 0 when filter text changes (user typed a character)
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
-	m = m.applyTaskFilter()
+	m = m.applyTaskFilter(true)
 	return m, cmd
 }
 
