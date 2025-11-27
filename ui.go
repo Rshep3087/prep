@@ -301,13 +301,22 @@ func updateTableWidths(m model) model {
 	availableWidth := m.windowWidth - tablePadding
 
 	// Tasks table: Name + Description + Source columns
-	// Source column expands to fill remaining space
+	// Description gets 60% of flexible space, Source gets 40%
 	tasksNameWidth := colWidthName
-	tasksDescWidth := colWidthDescription
+	flexibleWidth := availableWidth - tasksNameWidth - columnPadding*2 //nolint:mnd // 2 column paddings
+
+	// Description gets 60% of remaining width, minimum 40 chars
+	tasksDescWidth := max(
+		(flexibleWidth*60)/100, //nolint:mnd // 60% allocation for description
+		colWidthDescription,
+	)
+
+	// Source gets remaining width, minimum 25 chars
 	tasksSourceWidth := max(
-		availableWidth-tasksNameWidth-tasksDescWidth-columnPadding*2,
+		flexibleWidth-tasksDescWidth,
 		colWidthSource,
 	)
+
 	m.tasksTable.SetColumns([]table.Column{
 		{Title: "Name", Width: tasksNameWidth},
 		{Title: "Description", Width: tasksDescWidth},
