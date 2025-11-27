@@ -62,6 +62,12 @@ type editorClosedMsg struct {
 	err error
 }
 
+// interactiveTaskClosedMsg is sent when an interactive task finishes.
+type interactiveTaskClosedMsg struct {
+	taskName string
+	err      error
+}
+
 // pickerState represents the state of the tool installation picker.
 type pickerState int
 
@@ -148,9 +154,10 @@ type model struct {
 	windowHeight     int
 
 	// Task arguments state
-	argInputActive bool            // whether argument input mode is active
-	argInput       textinput.Model // text input for task arguments
-	argInputTask   string          // task name that arguments are for
+	argInputActive      bool            // whether argument input mode is active
+	argInput            textinput.Model // text input for task arguments
+	argInputTask        string          // task name that arguments are for
+	argInputInteractive bool            // whether argument input is for interactive execution
 
 	// Dependencies (DIP)
 	runner commandRunner // for running commands
@@ -212,6 +219,8 @@ func (m model) Init() tea.Cmd {
 
 // Update is called when a message is received. Use it to inspect messages
 // and, in response, update the model and/or send a command.
+//
+//nolint:funlen // Function has 52 statements, slightly over 50 limit
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// When picker is open, route messages to the picker (lists need all msg types for filtering)
 	if m.pickerState != pickerClosed {
@@ -288,6 +297,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editorClosedMsg:
 		return m.handleEditorClosed(msg), nil
+
+	case interactiveTaskClosedMsg:
+		return m.handleInteractiveTaskClosed(msg), nil
 
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg), nil

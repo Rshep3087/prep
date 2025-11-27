@@ -62,3 +62,27 @@ goreleaser release --clean
 """
 depends = ["check"]
 description = "Create and publish a new release"
+
+[tasks.interactive-prompt]
+description = "Test user input"
+run = '''
+read -p "Enter your name: " name
+echo "Hello, $name!"
+'''
+
+[tasks.interactive-menu]
+description = "Test menu selection"
+run = '''
+select choice in "Option 1" "Option 2" "Exit"; do
+    echo "Selected: $choice"
+    break
+done
+'''
+
+[tasks.interactive-password]
+description = "Test password input"
+run = '''
+read -sp "Enter password: " pass
+echo ""
+echo "Password entered"
+'''

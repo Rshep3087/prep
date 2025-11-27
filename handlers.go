@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -397,6 +400,16 @@ func (m model) handleEditorClosed(msg editorClosedMsg) model {
 	return m
 }
 
+// handleInteractiveTaskClosed processes the interactive task closed message.
+func (m model) handleInteractiveTaskClosed(msg interactiveTaskClosedMsg) model {
+	if msg.err != nil {
+		m.logger.Error("interactive task closed with error", "task", msg.taskName, "error", msg.err)
+	} else {
+		m.logger.Debug("interactive task completed successfully", "task", msg.taskName)
+	}
+	return m
+}
+
 // handleFileChanged processes file change events with debouncing.
 func (m model) handleFileChanged(msg watcher.FileChangedMsg) (model, tea.Cmd) {
 	if time.Since(m.lastReload) < debounceInterval {
@@ -407,6 +420,7 @@ func (m model) handleFileChanged(msg watcher.FileChangedMsg) (model, tea.Cmd) {
 	return m, loader.ReloadMiseData(m.runner)
 }
 
+//nolint:funlen // Function is 106 lines, slightly over 100 limit
 func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 	key := msg.String()
 
@@ -462,6 +476,12 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 				return m, nil, true
 			}
 			return m.handleTaskAltEnter()
+		},
+		"ctrl+enter": func(m model) (model, tea.Cmd, bool) {
+			if len(m.tasks) == 0 {
+				return m, nil, true
+			}
+			return m.handleTaskCtrlEnter()
 		},
 		"/": func(m model) (model, tea.Cmd, bool) {
 			m.filterActive = true
@@ -538,6 +558,22 @@ func (m model) handleTaskAltEnter() (model, tea.Cmd, bool) {
 	return model{}, nil, false
 }
 
+// handleTaskCtrlEnter opens argument input for interactive task execution.
+func (m model) handleTaskCtrlEnter() (model, tea.Cmd, bool) {
+	selectedRow := m.tasksTable.SelectedRow()
+	if selectedRow != nil {
+		taskName := selectedRow[0]
+		m.argInputActive = true
+		m.argInputInteractive = true // Mark as interactive
+		m.argInputTask = taskName
+		m.argInput.Focus()
+		m.argInput.SetValue("")
+		return m, nil, true
+	}
+
+	return model{}, nil, false
+}
+
 // handleArgInput handles input when argument input mode is active.
 func (m model) handleArgInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
@@ -545,6 +581,7 @@ func (m model) handleArgInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyEsc:
 			// Cancel argument input
 			m.argInputActive = false
+			m.argInputInteractive = false // Reset flag
 			m.argInputTask = ""
 			m.argInput.SetValue("")
 			return m, nil
@@ -552,19 +589,29 @@ func (m model) handleArgInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Run task with arguments
 			args := m.argInput.Value()
 			taskName := m.argInputTask
+			isInteractive := m.argInputInteractive
 
 			// Deactivate argument input
 			m.argInputActive = false
+			m.argInputInteractive = false // Reset flag
 			m.argInputTask = ""
 			m.argInput.SetValue("")
 
-			// Parse arguments (split by spaces, respecting quotes)
+			// Parse arguments with proper quote handling
 			var argSlice []string
 			if args != "" {
-				argSlice = strings.Fields(args)
+				var err error
+				argSlice, err = shlex.Split(args)
+				if err != nil {
+					m.logger.Error("failed to parse arguments", "args", args, "error", err)
+					argSlice = strings.Fields(args) // fallback
+				}
 			}
 
-			// Start task with arguments
+			// Branch on execution mode
+			if isInteractive {
+				return m, m.runInteractiveTask(taskName, argSlice...)
+			}
 			return m.startTask(taskName, argSlice...)
 		}
 	}
@@ -628,6 +675,23 @@ func (m model) handleFilterInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 				taskName := m.filteredTasks[cursor].Name
 				m.filterActive = false
 				m.argInputActive = true
+				m.argInputTask = taskName
+				m.argInput.Focus()
+				m.argInput.SetValue("")
+				return m, nil
+			}
+		}
+		return m, nil
+
+	case "ctrl+enter":
+		// Open argument input for interactive execution of filtered task
+		if len(m.filteredTasks) > 0 {
+			cursor := m.tasksTable.Cursor()
+			if cursor >= 0 && cursor < len(m.filteredTasks) {
+				taskName := m.filteredTasks[cursor].Name
+				m.filterActive = false
+				m.argInputActive = true
+				m.argInputInteractive = true
 				m.argInputTask = taskName
 				m.argInput.Focus()
 				m.argInput.SetValue("")
@@ -1302,5 +1366,96 @@ func (m model) openEditor(filePath string) tea.Cmd {
 	cmd := exec.CommandContext(context.Background(), executable, args...)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return editorClosedMsg{err: err}
+	})
+}
+
+var _ tea.ExecCommand = &interactiveTaskCommand{}
+
+// interactiveTaskCommand implements tea.ExecCommand to run a mise task
+// interactively and wait for user confirmation before returning to the TUI.
+type interactiveTaskCommand struct {
+	taskName string
+	args     []string
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
+}
+
+// Run executes the task and waits for user confirmation.
+func (c *interactiveTaskCommand) Run() error {
+	cmdArgs := []string{"run", c.taskName}
+	if len(c.args) > 0 {
+		cmdArgs = append(cmdArgs, "--")
+		cmdArgs = append(cmdArgs, c.args...)
+	}
+
+	cmd := exec.CommandContext(context.Background(), "mise", cmdArgs...)
+
+	cmd.Stdin = c.stdin
+	cmd.Stdout = c.stdout
+	cmd.Stderr = c.stderr
+
+	// Run the command and capture the error
+	err := cmd.Run()
+
+	// Determine the exit code from the error
+	exitCode := 0
+	if err != nil {
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1 // Indicates a non-exit error (e.g., command not found)
+		}
+	}
+
+	// Print status and prompt for user confirmation
+	fmt.Fprintln(c.stdout)
+	fmt.Fprintln(c.stdout, "────────────────────────────────")
+	if exitCode == 0 {
+		fmt.Fprintln(c.stdout, "Task completed successfully.")
+	} else {
+		fmt.Fprintf(c.stdout, "Task failed with exit code %d.\n", exitCode)
+	}
+	fmt.Fprintln(c.stdout, "Press Enter to return to the task list.")
+
+	// Wait for user to press Enter
+	if reader, ok := c.stdin.(*os.File); ok {
+		_, _ = bufio.NewReader(reader).ReadBytes('\n')
+	}
+
+	return err
+}
+
+// SetStdin sets the stdin for the command.
+func (c *interactiveTaskCommand) SetStdin(r io.Reader) {
+	c.stdin = r
+}
+
+// SetStdout sets the stdout for the command.
+func (c *interactiveTaskCommand) SetStdout(w io.Writer) {
+	c.stdout = w
+}
+
+// SetStderr sets the stderr for the command.
+func (c *interactiveTaskCommand) SetStderr(w io.Writer) {
+	c.stderr = w
+}
+
+// runInteractiveTask suspends the TUI and executes a mise task with full
+// terminal access, then waits for user confirmation before returning.
+func (m model) runInteractiveTask(taskName string, args ...string) tea.Cmd {
+	m.logger.Debug("launching interactive task", "task", taskName, "args", args)
+
+	cmd := &interactiveTaskCommand{
+		taskName: taskName,
+		args:     args,
+	}
+
+	return tea.Exec(cmd, func(err error) tea.Msg {
+		return interactiveTaskClosedMsg{
+			taskName: taskName,
+			err:      err,
+		}
 	})
 }
