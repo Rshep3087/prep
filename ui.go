@@ -291,6 +291,15 @@ func (m model) renderArgInputView() tea.View {
 	return v
 }
 
+// renderFilterInput renders the filter input field.
+func (m model) renderFilterInput() string {
+	if !m.filterActive {
+		return ""
+	}
+	prompt := m.styles.help.Render("Filter:")
+	return lipgloss.JoinHorizontal(lipgloss.Left, prompt, " ", m.filterInput.View())
+}
+
 // updateTableWidths adjusts table widths based on the current terminal width.
 func updateTableWidths(m model) model {
 	if m.windowWidth == 0 {

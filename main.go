@@ -74,6 +74,12 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 	ti.CharLimit = 500
 	ti.SetWidth(defaultInputWidth)
 
+	// Initialize filter input textinput
+	filterInput := textinput.New()
+	filterInput.Placeholder = "Filter tasks..."
+	filterInput.CharLimit = 100
+	filterInput.SetWidth(defaultInputWidth)
+
 	m := &model{
 		tasksTable:     newTable(getTasksTableConfig(), nil, true),
 		toolsTable:     newTable(getToolsTableConfig(), nil, false),
@@ -94,11 +100,14 @@ func run(_ context.Context, args []string, stdin io.Reader, stdout, stderr io.Wr
 		toolsHelp:      initHelpModel(),
 		outputHelp:     initHelpModel(),
 		argInputHelp:   initHelpModel(),
+		filterHelp:     initHelpModel(),
 		tasksKeys:      newTasksKeyMap(),
 		envVarsKeys:    newEnvVarsKeyMap(),
 		toolsKeys:      newToolsKeyMap(),
 		outputKeys:     newOutputKeyMap(false),
 		argInputKeys:   newArgInputKeyMap(),
+		filterKeys:     newFilterKeyMap(),
+		filterInput:    filterInput,
 	}
 	program := tea.NewProgram(m, tea.WithInput(stdin), tea.WithOutput(stdout))
 	m.sender = program // *tea.Program implements messageSender

@@ -183,6 +183,7 @@ type model struct {
 	toolsHelp    help.Model
 	outputHelp   help.Model
 	argInputHelp help.Model
+	filterHelp   help.Model
 
 	// Key maps
 	tasksKeys    tasksKeyMap
@@ -190,6 +191,12 @@ type model struct {
 	toolsKeys    toolsKeyMap
 	outputKeys   outputKeyMap
 	argInputKeys argInputKeyMap
+	filterKeys   filterKeyMap
+
+	// Task filter state
+	filterActive  bool            // whether filter mode is active
+	filterInput   textinput.Model // text input for filtering tasks
+	filteredTasks []loader.Task   // tasks matching current filter
 }
 
 func (m model) Init() tea.Cmd {
@@ -209,6 +216,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// When picker is open, route messages to the picker (lists need all msg types for filtering)
 	if m.pickerState != pickerClosed {
 		return m.handlePickerUpdate(msg)
+	}
+
+	// When filter is active, route messages to filter input handler
+	if m.filterActive {
+		return m.handleFilterInput(msg)
 	}
 
 	// When argument input is active, route messages to argument input handler
@@ -355,15 +367,25 @@ func (m model) View() tea.View {
 	toolsTitle := m.styles.renderTitle("Tools", m.focus == focusTools)
 	envVarsTitle := m.styles.renderTitle("Environment Variables", m.focus == focusEnvVars)
 
-	// Get contextual help based on focus
+	// Build tasks section with optional filter input
+	tasksSection := tasksTitle
+	if filterView := m.renderFilterInput(); filterView != "" {
+		tasksSection = lipgloss.JoinVertical(lipgloss.Left, tasksSection, filterView)
+	}
+
+	// Get contextual help based on focus or filter state
 	var helpView string
-	switch m.focus {
-	case focusTasks:
-		helpView = m.tasksHelp.View(m.tasksKeys)
-	case focusTools:
-		helpView = m.toolsHelp.View(m.toolsKeys)
-	case focusEnvVars:
-		helpView = m.envVarsHelp.View(m.envVarsKeys)
+	if m.filterActive {
+		helpView = m.filterHelp.View(m.filterKeys)
+	} else {
+		switch m.focus {
+		case focusTasks:
+			helpView = m.tasksHelp.View(m.tasksKeys)
+		case focusTools:
+			helpView = m.toolsHelp.View(m.toolsKeys)
+		case focusEnvVars:
+			helpView = m.envVarsHelp.View(m.envVarsKeys)
+		}
 	}
 
 	// Build the view using JoinVertical
@@ -371,7 +393,7 @@ func (m model) View() tea.View {
 		lipgloss.Left,
 		header,
 		"",
-		tasksTitle,
+		tasksSection,
 		m.tasksTable.View(),
 		"",
 		toolsTitle,
