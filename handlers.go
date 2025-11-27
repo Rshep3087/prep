@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/google/shlex"
+	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/rshep3087/prep/internal/loader"
 	"github.com/rshep3087/prep/internal/watcher"
@@ -257,9 +258,44 @@ func (m model) handleTaskOutput(msg taskOutputMsg) model {
 	}
 
 	m.output = append(m.output, msg.line)
-	m.viewport.SetContentLines(m.output)
+
+	// Apply word wrapping if enabled
+	displayLines := wrapOutputLines(m.output, m.viewport.Width(), m.wrapOutput)
+	m.viewport.SetContentLines(displayLines)
 	m.viewport.GotoBottom()
 	return m
+}
+
+// wrapOutputLines applies word wrapping to output lines if enabled.
+// Returns the original lines if wrapping is disabled or width is invalid.
+func wrapOutputLines(lines []string, width int, wrapEnabled bool) []string {
+	if !wrapEnabled {
+		return lines
+	}
+
+	// Minimum practical width to prevent excessive wrapping
+	const minWrapWidth = 20
+	if width < minWrapWidth {
+		return lines
+	}
+
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line == "" {
+			// Preserve empty lines
+			wrapped = append(wrapped, "")
+			continue
+		}
+
+		// Apply word wrapping
+		wrappedLine := wordwrap.String(line, width)
+		// wordwrap.String returns a single string with newlines
+		// Split it into separate lines for the viewport
+		splitLines := strings.Split(wrappedLine, "\n")
+		wrapped = append(wrapped, splitLines...)
+	}
+
+	return wrapped
 }
 
 // handleTaskDone processes task completion.
@@ -485,9 +521,34 @@ func (m model) getSelectedSourcePath() string {
 	return ""
 }
 
+// handleWrapToggle toggles word wrapping and preserves scroll position.
+func (m model) handleWrapToggle() model {
+	// Preserve scroll position ratio
+	oldYOffset := m.viewport.YOffset()
+	oldTotalHeight := m.viewport.TotalLineCount()
+
+	// Toggle wrap state
+	m.wrapOutput = !m.wrapOutput
+
+	// Re-apply content with new wrap state
+	displayLines := wrapOutputLines(m.output, m.viewport.Width(), m.wrapOutput)
+	m.viewport.SetContentLines(displayLines)
+
+	// Restore relative scroll position
+	newTotalHeight := m.viewport.TotalLineCount()
+	if oldTotalHeight > 0 && newTotalHeight > 0 {
+		newYOffset := (oldYOffset * newTotalHeight) / oldTotalHeight
+		m.viewport.SetYOffset(newYOffset)
+	}
+
+	return m
+}
+
 // handleOutputKeys handles key presses in the output view.
 func (m model) handleOutputKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "w":
+		return m.handleWrapToggle(), nil
 	case "q", keyEsc:
 		// Close output view (only if task is not running)
 		if !m.taskRunning {
@@ -495,6 +556,7 @@ func (m model) handleOutputKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.output = nil
 			m.runningTask = ""
 			m.taskErr = nil
+			m.wrapOutput = false // Reset wrap state
 			return m, nil
 		}
 		return m, nil
@@ -1017,13 +1079,25 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
 		// No list to resize
 	}
 	if m.showOutput {
+		// Preserve scroll position ratio
+		oldYOffset := m.viewport.YOffset()
+		oldTotalHeight := m.viewport.TotalLineCount()
+
 		// Update viewport dimensions (reuse instance instead of recreating)
 		m.viewport.SetWidth(msg.Width)
 		m.viewport.SetHeight(msg.Height - viewportHeaderFooterHeight)
 
-		// Content already set via SetContentLines, just update viewport and scroll to bottom
-		m.viewport.SetContentLines(m.output)
-		m.viewport.GotoBottom()
+		// Re-apply content with wrapping at new width
+		displayLines := wrapOutputLines(m.output, m.viewport.Width(), m.wrapOutput)
+		m.viewport.SetContentLines(displayLines)
+
+		// Restore relative scroll position
+		if oldTotalHeight > 0 && m.viewport.TotalLineCount() > 0 {
+			newYOffset := (oldYOffset * m.viewport.TotalLineCount()) / oldTotalHeight
+			m.viewport.SetYOffset(newYOffset)
+		} else {
+			m.viewport.GotoBottom()
+		}
 	} else {
 		// Update table layout based on terminal size
 		m = updateTableLayout(m)
