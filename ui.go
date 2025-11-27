@@ -274,7 +274,7 @@ func updateTableLayout(m model) model {
 func (m model) renderArgInputView() tea.View {
 	title := m.styles.title.Render(fmt.Sprintf("Run task: %s", m.argInputTask))
 	prompt := m.styles.help.Render("Enter arguments for the task:")
-	help := m.styles.help.Render("Enter to run • Esc to cancel")
+	helpView := m.argInputHelp.View(m.argInputKeys)
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -283,7 +283,7 @@ func (m model) renderArgInputView() tea.View {
 		prompt,
 		m.argInput.View(),
 		"",
-		help,
+		helpView,
 	)
 
 	v := tea.NewView(content)

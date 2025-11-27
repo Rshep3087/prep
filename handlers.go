@@ -998,6 +998,14 @@ func (m model) handleConfigListKeys(msg tea.KeyPressMsg) (model, tea.Cmd) {
 func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
 	m.windowWidth = msg.Width
 	m.windowHeight = msg.Height
+
+	// Update help bubble widths for graceful truncation
+	m.tasksHelp.SetWidth(msg.Width)
+	m.envVarsHelp.SetWidth(msg.Width)
+	m.toolsHelp.SetWidth(msg.Width)
+	m.outputHelp.SetWidth(msg.Width)
+	m.argInputHelp.SetWidth(msg.Width)
+
 	switch m.pickerState {
 	case pickerSelectTool:
 		m.toolList.SetSize(msg.Width, msg.Height-pickerListPadding)
