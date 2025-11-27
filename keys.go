@@ -10,6 +10,7 @@ type tasksKeyMap struct {
 	UpDown   key.Binding
 	Enter    key.Binding
 	AltEnter key.Binding
+	Filter   key.Binding
 	Edit     key.Binding
 	Quit     key.Binding
 }
@@ -33,6 +34,10 @@ func newTasksKeyMap() tasksKeyMap {
 			key.WithKeys("alt+enter"),
 			key.WithHelp("Alt+Enter", "args"),
 		),
+		Filter: key.NewBinding(
+			key.WithKeys("/"),
+			key.WithHelp("/", "filter"),
+		),
 		Edit: key.NewBinding(
 			key.WithKeys("e"),
 			key.WithHelp("e", "edit source"),
@@ -46,7 +51,7 @@ func newTasksKeyMap() tasksKeyMap {
 
 // ShortHelp returns keybindings to be shown in the mini help view.
 func (k tasksKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Tab, k.UpDown, k.Enter, k.AltEnter, k.Edit, k.Quit}
+	return []key.Binding{k.Tab, k.UpDown, k.Enter, k.AltEnter, k.Filter, k.Edit, k.Quit}
 }
 
 // FullHelp returns keybindings for the expanded help view.
@@ -241,5 +246,35 @@ func (k argInputKeyMap) ShortHelp() []key.Binding {
 
 // FullHelp returns keybindings for the expanded help view.
 func (k argInputKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{k.ShortHelp()}
+}
+
+// filterKeyMap defines key bindings for the filter input view.
+type filterKeyMap struct {
+	Enter  key.Binding
+	Cancel key.Binding
+}
+
+// newFilterKeyMap creates a new filterKeyMap.
+func newFilterKeyMap() filterKeyMap {
+	return filterKeyMap{
+		Enter: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("Enter", "run selected"),
+		),
+		Cancel: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("Esc", "clear filter"),
+		),
+	}
+}
+
+// ShortHelp returns keybindings to be shown in the mini help view.
+func (k filterKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Enter, k.Cancel}
+}
+
+// FullHelp returns keybindings for the expanded help view.
+func (k filterKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{k.ShortHelp()}
 }

@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/google/shlex"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/sahilm/fuzzy"
 
 	"github.com/rshep3087/prep/internal/loader"
 	"github.com/rshep3087/prep/internal/watcher"
@@ -43,6 +44,9 @@ const (
 	prioritySystemDir     = 100000 // Priority for system configs (/etc/mise)
 	priorityUnknown       = 999999 // Priority for unresolvable paths
 )
+
+// keyHanlder handler key presses.
+type keyHandler func(m model) (model, tea.Cmd, bool)
 
 // sourcePriority returns the priority of a source path for sorting.
 // Following mise's configuration hierarchy: configs closer to cwd have HIGHER priority (lower number).
@@ -100,6 +104,54 @@ func (m model) sourcePriority(sourcePath string) int {
 	return priorityUnknown
 }
 
+// filterTasks filters tasks using fuzzy matching against name and description.
+func filterTasks(tasks []loader.Task, filter string) []loader.Task {
+	if filter == "" {
+		return tasks
+	}
+
+	// Create searchable strings (name + description for each task)
+	var sources []string
+	taskMap := make(map[int]loader.Task)
+	for i, task := range tasks {
+		// Fuzzy match against name and description combined
+		sources = append(sources, task.Name+" "+task.Description)
+		taskMap[i] = task
+	}
+
+	// Use fuzzy.Find for intelligent matching
+	matches := fuzzy.Find(filter, sources)
+
+	// Build filtered results maintaining fuzzy match order (best matches first)
+	filtered := make([]loader.Task, 0, len(matches))
+	for _, match := range matches {
+		filtered = append(filtered, taskMap[match.Index])
+	}
+
+	return filtered
+}
+
+// applyTaskFilter applies filter and updates table rows.
+func (m model) applyTaskFilter() model {
+	filterValue := m.filterInput.Value()
+	if filterValue == "" {
+		m.filteredTasks = m.tasks
+	} else {
+		m.filteredTasks = filterTasks(m.tasks, filterValue)
+	}
+
+	rows := make([]table.Row, 0, len(m.filteredTasks))
+	for _, task := range m.filteredTasks {
+		rows = append(rows, table.Row{task.Name, task.Description, formatSourcePath(task.Source)})
+	}
+	m.tasksTable.SetRows(rows)
+
+	if len(rows) > 0 {
+		m.tasksTable.SetCursor(0)
+	}
+	return m
+}
+
 // handleTasksLoaded processes the tasksLoadedMsg and initializes the tasks table.
 func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 	if msg.Err != nil {
@@ -136,6 +188,12 @@ func (m model) handleTasksLoaded(msg loader.TasksLoadedMsg) model {
 	if m.windowWidth > 0 {
 		m = updateTableLayout(m)
 	}
+
+	// Re-apply filter if active
+	if m.filterActive {
+		m = m.applyTaskFilter()
+	}
+
 	return m
 }
 
@@ -349,72 +407,109 @@ func (m model) handleFileChanged(msg watcher.FileChangedMsg) (model, tea.Cmd) {
 	return m, loader.ReloadMiseData(m.runner)
 }
 
-// handleMainKeys handles key presses in the main view (task list).
-// Returns (model, cmd, handled) where handled indicates if the key was consumed.
 func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
-	switch msg.String() {
-	case "q", "ctrl+c", keyEsc:
-		watcher.Close(m.watcher)
-		return m, tea.Quit, true
-	case keyEnter:
-		// Only run tasks when focused on tasks table
-		if m.focus == focusTasks && len(m.tasks) > 0 {
-			return m.handleTaskEnter()
-		}
-		return m, nil, true
-	case keyAltEnter:
-		if m.focus == focusTasks && len(m.tasks) > 0 {
-			return m.handleTaskAltEnter()
-		}
-		return m, nil, true
-	case "tab":
-		// Cycle focus: tasks -> tools -> envVars -> tasks
-		m.tasksTable.Blur()
-		m.toolsTable.Blur()
-		m.envVarsTable.Blur()
-		m.focus = (m.focus + 1) % focusSectionCount
-		switch m.focus {
-		case focusTasks:
-			m.tasksTable.Focus()
-		case focusTools:
-			m.toolsTable.Focus()
-		case focusEnvVars:
-			m.envVarsTable.Focus()
-		}
-		return m, nil, true
-	case "v":
-		// Show selected env var value (only when focused on env vars)
-		if m.focus == focusEnvVars {
-			m = showSelectedEnvVar(m)
+	key := msg.String()
+
+	globalKeys := map[string]keyHandler{
+		"q": func(m model) (model, tea.Cmd, bool) {
+			watcher.Close(m.watcher)
+			return m, tea.Quit, true
+		},
+		"ctrl+c": func(m model) (model, tea.Cmd, bool) {
+			watcher.Close(m.watcher)
+			return m, tea.Quit, true
+		},
+		keyEsc: func(m model) (model, tea.Cmd, bool) {
+			watcher.Close(m.watcher)
+			return m, tea.Quit, true
+		},
+		"tab": func(m model) (model, tea.Cmd, bool) {
+			m.tasksTable.Blur()
+			m.toolsTable.Blur()
+			m.envVarsTable.Blur()
+
+			m.focus = (m.focus + 1) % focusSectionCount
+
+			switch m.focus {
+			case focusTasks:
+				m.tasksTable.Focus()
+			case focusTools:
+				m.toolsTable.Focus()
+			case focusEnvVars:
+				m.envVarsTable.Focus()
+			}
 			return m, nil, true
-		}
-	case "V":
-		// Show all env var values (only when focused on env vars)
-		if m.focus == focusEnvVars {
-			m = showAllEnvVars(m)
-			return m, nil, true
-		}
-	case "h":
-		// Hide all env var values (only when focused on env vars)
-		if m.focus == focusEnvVars {
-			m = hideAllEnvVars(m)
-			return m, nil, true
-		}
-	case "a":
-		// Add tool (only when focused on tools table)
-		if m.focus == focusTools {
-			return m.openToolPicker()
-		}
-	case "u":
-		// Unuse tool (only when focused on tools table)
-		if m.focus == focusTools {
-			return m.unuseTool()
-		}
-	case "e":
-		// Edit source file (only when focused on tasks or tools table)
-		return m.editSourceFile()
+		},
+		"e": func(m model) (model, tea.Cmd, bool) {
+			// edit allowed in tasks or tools
+			return m.editSourceFile()
+		},
 	}
-	// Key not handled - let tables process it
+
+	if fn, ok := globalKeys[key]; ok {
+		return fn(m)
+	}
+
+	taskKeyHandlers := map[string]keyHandler{
+		keyEnter: func(m model) (model, tea.Cmd, bool) {
+			if len(m.tasks) == 0 {
+				return m, nil, true
+			}
+			return m.handleTaskEnter()
+		},
+		keyAltEnter: func(m model) (model, tea.Cmd, bool) {
+			if len(m.tasks) == 0 {
+				return m, nil, true
+			}
+			return m.handleTaskAltEnter()
+		},
+		"/": func(m model) (model, tea.Cmd, bool) {
+			m.filterActive = true
+			m.filterInput.Focus()
+			m.filterInput.SetValue("")
+			m.filteredTasks = m.tasks
+			return m, nil, true
+		},
+	}
+
+	toolKeyHandlers := map[string]keyHandler{
+		"a": func(m model) (model, tea.Cmd, bool) {
+			return m.openToolPicker()
+		},
+		"u": func(m model) (model, tea.Cmd, bool) {
+			return m.unuseTool()
+		},
+	}
+
+	envKeyHandlers := map[string]keyHandler{
+		"v": func(m model) (model, tea.Cmd, bool) {
+			return showSelectedEnvVar(m), nil, true
+		},
+		"V": func(m model) (model, tea.Cmd, bool) {
+			return showAllEnvVars(m), nil, true
+		},
+		"h": func(m model) (model, tea.Cmd, bool) {
+			return hideAllEnvVars(m), nil, true
+		},
+	}
+
+	// 2) focus specific
+	switch m.focus {
+	case focusTasks:
+		if fn, ok := taskKeyHandlers[key]; ok {
+			return fn(m)
+		}
+	case focusTools:
+		if fn, ok := toolKeyHandlers[key]; ok {
+			return fn(m)
+		}
+	case focusEnvVars:
+		if fn, ok := envKeyHandlers[key]; ok {
+			return fn(m)
+		}
+	}
+
+	// not handled → bubble up
 	return m, nil, false
 }
 
@@ -477,6 +572,81 @@ func (m model) handleArgInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Pass message to text input for normal editing
 	var cmd tea.Cmd
 	m.argInput, cmd = m.argInput.Update(msg)
+	return m, cmd
+}
+
+// clearFilter deactivates filter mode and restores the full task list.
+func (m model) clearFilter() model {
+	m.filterActive = false
+	m.filterInput.SetValue("")
+	m.filteredTasks = m.tasks
+
+	// Restore full task list
+	rows := make([]table.Row, 0, len(m.tasks))
+	for _, task := range m.tasks {
+		rows = append(rows, table.Row{task.Name, task.Description, formatSourcePath(task.Source)})
+	}
+	m.tasksTable.SetRows(rows)
+	if len(rows) > 0 {
+		m.tasksTable.SetCursor(0)
+	}
+	return m
+}
+
+// handleFilterInput handles input when filter mode is active.
+func (m model) handleFilterInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		// Update filter input and apply filter in real-time
+		var cmd tea.Cmd
+		m.filterInput, cmd = m.filterInput.Update(msg)
+		m = m.applyTaskFilter()
+		return m, cmd
+	}
+
+	switch keyMsg.String() {
+	case keyEsc:
+		return m.clearFilter(), nil
+
+	case keyEnter:
+		// Run selected filtered task (deactivate filter to show output)
+		if len(m.filteredTasks) > 0 {
+			cursor := m.tasksTable.Cursor()
+			if cursor >= 0 && cursor < len(m.filteredTasks) {
+				taskName := m.filteredTasks[cursor].Name
+				m.filterActive = false
+				return m.startTask(taskName)
+			}
+		}
+		return m, nil
+
+	case keyAltEnter:
+		// Open argument input for selected filtered task (deactivate filter)
+		if len(m.filteredTasks) > 0 {
+			cursor := m.tasksTable.Cursor()
+			if cursor >= 0 && cursor < len(m.filteredTasks) {
+				taskName := m.filteredTasks[cursor].Name
+				m.filterActive = false
+				m.argInputActive = true
+				m.argInputTask = taskName
+				m.argInput.Focus()
+				m.argInput.SetValue("")
+				return m, nil
+			}
+		}
+		return m, nil
+
+	case "up", "down", "j", "k":
+		// Pass navigation keys to table
+		var cmd tea.Cmd
+		m.tasksTable, cmd = m.tasksTable.Update(msg)
+		return m, cmd
+	}
+
+	// Update filter input and apply filter in real-time
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
+	m = m.applyTaskFilter()
 	return m, cmd
 }
 
@@ -557,6 +727,10 @@ func (m model) handleOutputKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.runningTask = ""
 			m.taskErr = nil
 			m.wrapOutput = false // Reset wrap state
+			// Clear filter data when returning from output view (filter may have been used to select task)
+			if len(m.filteredTasks) > 0 && len(m.filteredTasks) < len(m.tasks) {
+				m = m.clearFilter()
+			}
 			return m, nil
 		}
 		return m, nil
@@ -1067,6 +1241,7 @@ func (m model) handleWindowSize(msg tea.WindowSizeMsg) tea.Model {
 	m.toolsHelp.SetWidth(msg.Width)
 	m.outputHelp.SetWidth(msg.Width)
 	m.argInputHelp.SetWidth(msg.Width)
+	m.filterHelp.SetWidth(msg.Width)
 
 	switch m.pickerState {
 	case pickerSelectTool:
