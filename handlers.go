@@ -483,6 +483,12 @@ func (m model) handleMainKeys(msg tea.KeyPressMsg) (model, tea.Cmd, bool) {
 			}
 			return m.handleTaskCtrlEnter()
 		},
+		"ctrl+shift+enter": func(m model) (model, tea.Cmd, bool) {
+			if len(m.tasks) == 0 {
+				return m, nil, true
+			}
+			return m.handleTaskCtrlAltEnter()
+		},
 		"/": func(m model) (model, tea.Cmd, bool) {
 			m.filterActive = true
 			m.filterInput.Focus()
@@ -558,13 +564,25 @@ func (m model) handleTaskAltEnter() (model, tea.Cmd, bool) {
 	return model{}, nil, false
 }
 
-// handleTaskCtrlEnter opens argument input for interactive task execution.
+// handleTaskCtrlEnter runs an interactive task immediately without prompting for arguments.
 func (m model) handleTaskCtrlEnter() (model, tea.Cmd, bool) {
 	selectedRow := m.tasksTable.SelectedRow()
 	if selectedRow != nil {
 		taskName := selectedRow[0]
+		cmd := m.runInteractiveTask(taskName)
+		return m, cmd, true
+	}
+
+	return model{}, nil, false
+}
+
+// handleTaskCtrlAltEnter opens argument input for interactive task execution.
+func (m model) handleTaskCtrlAltEnter() (model, tea.Cmd, bool) {
+	selectedRow := m.tasksTable.SelectedRow()
+	if selectedRow != nil {
+		taskName := selectedRow[0]
 		m.argInputActive = true
-		m.argInputInteractive = true // Mark as interactive
+		m.argInputInteractive = true
 		m.argInputTask = taskName
 		m.argInput.Focus()
 		m.argInput.SetValue("")
