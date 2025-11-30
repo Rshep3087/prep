@@ -6,13 +6,15 @@ import (
 
 // tasksKeyMap defines key bindings for the tasks view.
 type tasksKeyMap struct {
-	Tab      key.Binding
-	UpDown   key.Binding
-	Enter    key.Binding
-	AltEnter key.Binding
-	Filter   key.Binding
-	Edit     key.Binding
-	Quit     key.Binding
+	Tab          key.Binding
+	UpDown       key.Binding
+	Enter        key.Binding
+	AltEnter     key.Binding
+	CtrlEnter    key.Binding
+	CtrlAltEnter key.Binding
+	Filter       key.Binding
+	Edit         key.Binding
+	Quit         key.Binding
 }
 
 // newTasksKeyMap creates a new tasksKeyMap.
@@ -34,6 +36,14 @@ func newTasksKeyMap() tasksKeyMap {
 			key.WithKeys("alt+enter"),
 			key.WithHelp("Alt+Enter", "args"),
 		),
+		CtrlEnter: key.NewBinding(
+			key.WithKeys("ctrl+enter"),
+			key.WithHelp("Ctrl+Enter", "interactive"),
+		),
+		CtrlAltEnter: key.NewBinding(
+			key.WithKeys("ctrl+shift+enter"),
+			key.WithHelp("Shift+Ctrl+Enter", "interactive + args"),
+		),
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "filter"),
@@ -51,7 +61,7 @@ func newTasksKeyMap() tasksKeyMap {
 
 // ShortHelp returns keybindings to be shown in the mini help view.
 func (k tasksKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Tab, k.UpDown, k.Enter, k.AltEnter, k.Filter, k.Edit, k.Quit}
+	return []key.Binding{k.Tab, k.UpDown, k.Enter, k.AltEnter, k.CtrlEnter, k.CtrlAltEnter, k.Filter, k.Edit, k.Quit}
 }
 
 // FullHelp returns keybindings for the expanded help view.
